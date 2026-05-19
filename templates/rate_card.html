@@ -5,15 +5,20 @@
 <h2>Rate Card — {{ rows|length }} lanes</h2>
 <p class="sub">3+ carriers per lane. Carrier Type and Lane Criticality drive the ranking algorithm.</p>
 
-<table class="card">
+<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
+  <button class="btn btn-primary" onclick="openAdd()">+ Add Rate</button>
+  <input type="text" id="rc-search" placeholder="Search by carrier or lane" style="flex:1;padding:8px 10px;border:0.5px solid var(--border);border-radius:6px;font-size:13px;">
+</div>
+
+<table class="card" id="rc-table">
   <thead><tr>
     <th>Lane ID</th><th>Carrier</th><th>Carrier Type</th>
     <th>Origin</th><th>Destination</th><th>Crit</th>
     <th class="right">Base Rate</th><th>FSC%</th><th>Tier</th>
   </tr></thead>
-  <tbody>
+  <tbody id="rc-tbody">
   {% for r in rows %}
-  <tr>
+  <tr data-search="{{ (r.carrier_name or '') ~ ' ' ~ (r.origin_terminal or '') ~ ' ' ~ (r.destination_dc or '') }}">
     <td class="mono">{{ r.lane_id }}</td>
     <td>{{ r.carrier_name }}</td>
     <td><span class="pill {{ 'crit' if 'Ocean' in r.carrier_type or 'Rail' in r.carrier_type else 'med' if 'Premium' in r.carrier_type else 'low' }}">{{ r.carrier_type }}</span></td>
@@ -27,4 +32,106 @@
   {% endfor %}
   </tbody>
 </table>
+
+<!-- Add Rate Modal -->
+<div id="add-modal" class="modal-backdrop" style="display:none;">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>+ Add Rate</h3>
+      <button class="modal-close" onclick="closeAdd()">×</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div><label>Lane ID</label><input id="f-lane" placeholder="auto-generated" disabled></div>
+        <div><label>Carrier</label><input id="f-carrier" placeholder="e.g., Pacific Coastline Drayage"></div>
+        <div><label>Carrier Type</label>
+          <select id="f-ctype">
+            <option>Third-Party Dray</option>
+            <option>Third-Party Dray (Premium)</option>
+            <option>Ocean Carrier Dray</option>
+            <option>Rail Carrier Dray</option>
+          </select></div>
+        <div><label>Tier</label>
+          <select id="f-tier">
+            <option>Primary</option><option>Backup</option><option>Spot</option>
+            <option>Carrier Haulage</option><option>Rail Bundled</option>
+          </select></div>
+        <div><label>Origin</label><input id="f-origin" placeholder="e.g., Long Beach — Pier T"></div>
+        <div><label>Destination</label><input id="f-dest" placeholder="e.g., NewAge Perris CA"></div>
+        <div><label>Lane Criticality</label>
+          <select id="f-crit"><option>HIGH</option><option>MEDIUM</option><option>LOW</option></select></div>
+        <div><label>Equipment</label>
+          <select id="f-equip"><option>40HC</option><option>53' TL</option><option>53' IM</option></select></div>
+        <div><label>Base Rate (USD)</label><input id="f-base" type="number" placeholder="495"></div>
+        <div><label>FSC %</label><input id="f-fsc" type="number" placeholder="22"></div>
+      </div>
+      <label style="margin-top:14px;display:block;">Notes</label>
+      <textarea id="f-notes" placeholder="Optional notes" rows="2" style="width:100%;padding:8px 10px;border:0.5px solid var(--border);border-radius:6px;font-family:inherit;font-size:13px;"></textarea>
+      <div id="add-status" style="margin-top:12px;font-size:13px;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeAdd()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveRate()">Save Rate</button>
+    </div>
+  </div>
+</div>
+
+<style>
+.btn { padding:8px 14px; border:0.5px solid var(--border); border-radius:6px;
+       background:#fff; cursor:pointer; font-size:13px; }
+.btn:hover { background:#F6F8FB; }
+.btn-primary { background:#0C447C; color:#fff; border-color:#0C447C; }
+.btn-primary:hover { background:#0A3866; }
+.modal-backdrop { position:fixed; inset:0; background:rgba(15,23,42,0.5); z-index:1000;
+                  display:flex; align-items:center; justify-content:center; padding:24px; }
+.modal { background:#fff; border-radius:12px; max-width:700px; width:100%;
+         display:flex; flex-direction:column; overflow:hidden; max-height:90vh; }
+.modal-header { display:flex; justify-content:space-between; align-items:center;
+                padding:14px 20px; border-bottom:0.5px solid var(--border); }
+.modal-close { border:0; background:transparent; font-size:22px; cursor:pointer; color:#64748B; }
+.modal-body { padding:16px 20px; overflow-y:auto; }
+.modal-body label { display:block; font-size:11px; color:#475569; text-transform:uppercase;
+                    letter-spacing:0.4px; margin-bottom:4px; }
+.modal-body input, .modal-body select { width:100%; padding:8px 10px; border:0.5px solid var(--border);
+                                         border-radius:6px; font-size:13px; }
+.modal-footer { display:flex; gap:8px; justify-content:flex-end; padding:12px 20px;
+                border-top:0.5px solid var(--border); background:#F6F8FB; }
+</style>
+
+<script>
+let addCounter = 400;
+function openAdd() {
+  document.getElementById('add-modal').style.display = 'flex';
+  document.getElementById('f-lane').value = `RC-NEW-${++addCounter}`;
+  document.getElementById('add-status').textContent = '';
+}
+function closeAdd() { document.getElementById('add-modal').style.display = 'none'; }
+function saveRate() {
+  const carrier = document.getElementById('f-carrier').value.trim();
+  if (!carrier) { alert('Carrier name required.'); return; }
+  const newRow = `
+    <tr style="background:#FFF9E6;animation:fade 5s ease-out forwards;">
+      <td class="mono">${document.getElementById('f-lane').value}</td>
+      <td>${carrier}</td>
+      <td><span class="pill low">${document.getElementById('f-ctype').value}</span></td>
+      <td>${document.getElementById('f-origin').value}</td>
+      <td>${document.getElementById('f-dest').value}</td>
+      <td><span class="pill crit">${document.getElementById('f-crit').value}</span></td>
+      <td class="right">$${parseFloat(document.getElementById('f-base').value || 0).toFixed(0)}</td>
+      <td>${document.getElementById('f-fsc').value}%</td>
+      <td>${document.getElementById('f-tier').value} <span class="pill low" style="margin-left:4px;">NEW</span></td>
+    </tr>`;
+  document.getElementById('rc-tbody').insertAdjacentHTML('afterbegin', newRow);
+  document.getElementById('add-status').innerHTML =
+    '<span style="color:#085041;">✓ Rate added to top of table (in-memory; refresh to revert).</span>';
+  setTimeout(closeAdd, 1500);
+}
+// Search filter
+document.getElementById('rc-search').addEventListener('input', e => {
+  const q = e.target.value.toLowerCase();
+  document.querySelectorAll('#rc-tbody tr').forEach(tr => {
+    tr.style.display = !q || tr.dataset.search.toLowerCase().includes(q) ? '' : 'none';
+  });
+});
+</script>
 {% endblock %}

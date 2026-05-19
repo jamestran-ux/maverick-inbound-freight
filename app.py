@@ -78,6 +78,7 @@ def drayage_invoices_page():
     invoices = [dict(r) for r in rows]
     counts = {row["status"]: row["c"] for row in conn.execute(
         "SELECT status, COUNT(*) AS c FROM drayage_invoices GROUP BY status").fetchall()}
+    counts["All"] = sum(counts.values())
     conn.close()
     return render_template("drayage_invoices.html", invoices=invoices,
                            counts=counts, status_filter=status_filter)
