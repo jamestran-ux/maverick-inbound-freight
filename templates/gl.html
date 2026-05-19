@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% set active = "gl" %}
+{% block title %}GL Reconciliation{% endblock %}
+{% block content %}
+<h2>GL Reconciliation — {{ period }}</h2>
+<p class="sub">Accrued vs actual by GL account. Generate journal entries on close.</p>
+
+<table class="card">
+  <thead><tr>
+    <th>Account</th><th>Name</th>
+    <th class="right">Accrued</th><th class="right">Actual</th>
+    <th class="right">Variance</th><th>Status</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr>
+    <td class="mono">{{ r.account_code }}</td>
+    <td>{{ r.account_name }}</td>
+    <td class="right">${{ "{:,.0f}".format(r.accrued or 0) }}</td>
+    <td class="right">${{ "{:,.0f}".format(r.actual or 0) }}</td>
+    <td class="right" style="font-weight:600;color:{{ '#791F1F' if (r.variance or 0) > 0 else '#085041' }};">
+      {% if (r.variance or 0) >= 0 %}+{% endif %}${{ "{:,.0f}".format(r.variance or 0) }}
+    </td>
+    <td><span class="pill med">{{ r.status }}</span></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

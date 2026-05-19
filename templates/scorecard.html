@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% set active = "scorecard" %}
+{% block title %}Carrier Scorecard{% endblock %}
+{% block content %}
+<h2>Carrier Scorecard</h2>
+<p class="sub">Composite reliability score per carrier. Drives ranking + lane assignment.</p>
+
+<table class="card">
+  <thead><tr>
+    <th>Carrier</th><th>Type</th>
+    <th class="right">On-Time Pickup</th>
+    <th class="right">On-Time Delivery</th>
+    <th class="right">Invoice Accuracy</th>
+    <th class="right">Accessorial %</th>
+    <th class="right">Dispute Win</th>
+    <th class="right">Composite</th>
+  </tr></thead>
+  <tbody>
+  {% for c in carriers %}
+  <tr>
+    <td>{{ c.carrier_name }}</td>
+    <td><span class="pill {{ 'crit' if 'Ocean' in (c.carrier_type or '') or 'Rail' in (c.carrier_type or '') else 'med' if 'Premium' in (c.carrier_type or '') else 'low' }}">{{ c.carrier_type }}</span></td>
+    <td class="right">{{ "{:.0f}".format(c.on_time_pickup or 0) }}%</td>
+    <td class="right">{{ "{:.0f}".format(c.on_time_delivery or 0) }}%</td>
+    <td class="right">{{ "{:.0f}".format(c.invoice_accuracy or 0) }}%</td>
+    <td class="right">{{ "{:.0f}".format(c.accessorial_pct or 0) }}%</td>
+    <td class="right">{{ "{:.0f}".format(c.dispute_win_rate or 0) }}%</td>
+    <td class="right" style="font-weight:700;color:{{ '#085041' if (c.composite_score or 0) >= 85 else '#633806' if (c.composite_score or 0) >= 78 else '#791F1F' }};">{{ "{:.0f}".format(c.composite_score or 0) }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p style="font-size:11px;color:#64748B;margin-top:12px;font-style:italic;">
+  Composite ≥85 = eligible for HIGH-criticality lanes. ≥78 = eligible for MEDIUM. &lt;78 = LOW-criticality only.
+</p>
+{% endblock %}

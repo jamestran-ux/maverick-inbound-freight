@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% set active = "rate_card" %}
+{% block title %}Rate Card{% endblock %}
+{% block content %}
+<h2>Rate Card — {{ rows|length }} lanes</h2>
+<p class="sub">3+ carriers per lane. Carrier Type and Lane Criticality drive the ranking algorithm.</p>
+
+<table class="card">
+  <thead><tr>
+    <th>Lane ID</th><th>Carrier</th><th>Carrier Type</th>
+    <th>Origin</th><th>Destination</th><th>Crit</th>
+    <th class="right">Base Rate</th><th>FSC%</th><th>Tier</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr>
+    <td class="mono">{{ r.lane_id }}</td>
+    <td>{{ r.carrier_name }}</td>
+    <td><span class="pill {{ 'crit' if 'Ocean' in r.carrier_type or 'Rail' in r.carrier_type else 'med' if 'Premium' in r.carrier_type else 'low' }}">{{ r.carrier_type }}</span></td>
+    <td>{{ r.origin_terminal }}</td>
+    <td>{{ r.destination_dc }}</td>
+    <td><span class="pill {{ 'crit' if r.lane_criticality=='HIGH' else 'high' if r.lane_criticality=='MEDIUM' else 'low' }}">{{ r.lane_criticality }}</span></td>
+    <td class="right">${{ "{:,.0f}".format(r.base_rate or 0) }}</td>
+    <td>{{ "{:.0%}".format(r.fsc_pct or 0) }}</td>
+    <td>{{ r.tier or "—" }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% set active = "users" %}
+{% block title %}Users{% endblock %}
+{% block content %}
+<h2>Users & Access</h2>
+<p class="sub">7 seeded users. RBAC roles map to which sections are visible.</p>
+
+<table class="card">
+  <thead><tr><th>First</th><th>Last</th><th>Email</th><th>Role</th><th>Last Login</th></tr></thead>
+  <tbody>
+  {% for u in users %}
+  <tr>
+    <td>{{ u.first_name }}</td>
+    <td>{{ u.last_name }}</td>
+    <td class="mono">{{ u.email }}</td>
+    <td>{{ u.role }}</td>
+    <td>{{ u.last_login }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

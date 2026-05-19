@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% set active = "drayage" %}
+{% block title %}{{ inv.invoice_no }}{% endblock %}
+{% block content %}
+<h2>{{ inv.invoice_no }}</h2>
+<p class="sub">{{ inv.carrier_name }} · {{ inv.invoice_date }}</p>
+
+<div class="card">
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;font-size:13px;">
+    <div><div style="color:#64748B;font-size:11px;text-transform:uppercase;">FB# / Load ID</div>
+      <div class="mono">{{ inv.fb_no }}</div></div>
+    <div><div style="color:#64748B;font-size:11px;text-transform:uppercase;">Container</div>
+      <div class="mono">{{ inv.container_no }}</div></div>
+    <div><div style="color:#64748B;font-size:11px;text-transform:uppercase;">BOL/MBL</div>
+      <div class="mono">{{ inv.bol or "—" }}</div></div>
+    <div><div style="color:#64748B;font-size:11px;text-transform:uppercase;">Lane</div>
+      <div>{{ inv.origin }} → {{ inv.destination }}</div></div>
+    <div><div style="color:#64748B;font-size:11px;text-transform:uppercase;">Linehaul</div>
+      <div>${{ "{:,.2f}".format(inv.base_rate or 0) }}</div></div>
+    <div><div style="color:#64748B;font-size:11px;text-transform:uppercase;">FSC</div>
+      <div>${{ "{:,.2f}".format(inv.fsc_amount or 0) }} ({{ "{:.0%}".format(inv.fsc_pct or 0) }})</div></div>
+    <div><div style="color:#64748B;font-size:11px;text-transform:uppercase;">Grand Total</div>
+      <div style="font-weight:700;">${{ "{:,.2f}".format(inv.grand_total or 0) }}</div></div>
+    <div><div style="color:#64748B;font-size:11px;text-transform:uppercase;">Status</div>
+      <div><span class="pill {{ 'pending' if inv.status=='Pending Review' else 'dispute' if inv.status=='In Dispute' else 'complete' if inv.status=='Complete' else 'med' }}">{{ inv.status }}</span></div></div>
+  </div>
+</div>
+
+{% if exceptions %}
+<h3>Audit Exceptions ({{ exceptions|length }})</h3>
+{% for e in exceptions %}
+<div class="card" style="border-left:4px solid {{ '#791F1F' if e.severity=='CRITICAL' else '#633806' if e.severity=='HIGH' else '#3C3489' if e.severity=='MEDIUM' else '#085041' }};">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+    <div>
+      <span class="pill {{ 'crit' if e.severity=='CRITICAL' else 'high' if e.severity=='HIGH' else 'med' if e.severity=='MEDIUM' else 'low' }}">{{ e.severity }}</span>
+      <strong style="margin-left:8px;">{{ e.rule_family }}</strong>
+    </div>
+    <div style="font-weight:700;font-size:16px;">${{ "{:,.2f}".format(e.dollars_at_risk or 0) }}</div>
+  </div>
+  <div style="margin-top:8px;font-size:13px;">{{ e.description }}</div>
+  <div style="margin-top:6px;font-size:12px;color:#0C447C;">→ {{ e.recommended_action }}</div>
+</div>
+{% endfor %}
+<form method="post" action="/api/drayage-invoices/{{ inv.invoice_no }}/dispute" style="margin-top:12px;"
+      onsubmit="event.preventDefault(); fetch(this.action,{method:'POST'}).then(r=>r.json()).then(d=>{ document.getElementById('dispute-output').textContent = 'TO: '+d.email.to+'\nSUBJECT: '+d.email.subject+'\n\n'+d.email.body; });">
+  <button style="background:#0C447C;color:#fff;border:0;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;">Draft dispute email</button>
+</form>
+<pre id="dispute-output" style="background:#F6F8FB;padding:12px;margin-top:12px;font-size:12px;font-family:inherit;white-space:pre-wrap;border-radius:6px;"></pre>
+{% endif %}
+
+<h3>Line items ({{ lines|length }})</h3>
+<table class="card">
+  <thead><tr>
+    <th>#</th><th>Type</th><th>Description</th>
+    <th class="right">Qty</th><th class="right">Rate</th><th class="right">Amount</th>
+    <th class="right">Ideal vs Actual</th>
+  </tr></thead>
+  <tbody>
+  {% for l in lines %}
+  <tr>
+    <td>{{ l.line_no }}</td>
+    <td>{{ l.line_type }}</td>
+    <td>{{ l.description }}</td>
+    <td class="right">{{ "%g" % l.qty }}</td>
+    <td class="right">${{ "{:,.2f}".format(l.rate or 0) }}</td>
+    <td class="right">${{ "{:,.2f}".format(l.amount or 0) }}</td>
+    <td class="right">
+      {% if l.line_type == "SHIPMENT" and ideal %}
+        ${{ "{:.0f}".format(ideal.base_rate) }} ({{ ideal.carrier_name.split(' ')[0] }})
+        {% if (l.amount or 0) > (ideal.base_rate or 0) %}<br><span class="pill high">-${{ "{:.0f}".format((l.amount or 0) - (ideal.base_rate or 0)) }} leakage</span>{% endif %}
+      {% else %}—{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<p style="margin-top:16px;"><a href="/drayage-invoices">← Back to list</a></p>
+{% endblock %}

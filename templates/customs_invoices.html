@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% set active = "customs" %}
+{% block title %}Customs Invoices{% endblock %}
+{% block content %}
+<h2>Customs Invoices</h2>
+<p class="sub">Broker invoices with Section 301 / 232 duty stack highlighted.</p>
+
+<table class="card">
+  <thead><tr>
+    <th>Entry #</th><th>Container #</th><th>PO #</th>
+    <th class="right">Entered Value</th><th>HTS</th>
+    <th class="right">Sec 301</th><th class="right">Sec 232</th>
+    <th class="right">Duty</th><th class="right">Subtotal</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr>
+    <td class="mono">{{ r.entry_no }}</td>
+    <td class="mono">{{ r.container_no }}</td>
+    <td class="mono">{{ r.po_no }}</td>
+    <td class="right">${{ "{:,.0f}".format(r.entered_value or 0) }}</td>
+    <td class="mono">{{ r.hts_code }}</td>
+    <td class="right">{% if r.sec301_pct and r.sec301_pct != '—' %}<span class="pill crit">{{ r.sec301_pct }}</span>{% else %}—{% endif %}</td>
+    <td class="right">{% if r.sec232_pct and r.sec232_pct != '—' %}<span class="pill crit">{{ r.sec232_pct }}</span>{% else %}—{% endif %}</td>
+    <td class="right">${{ "{:,.0f}".format(r.duty or 0) }}</td>
+    <td class="right">${{ "{:,.2f}".format(r.subtotal or 0) }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Maverick — {% block title %}Inbound Freight{% endblock %}</title>
+<style>
+  :root {
+    --blue: #0C447C; --bg: #F6F8FB; --card: #FFFFFF;
+    --border: rgba(15,23,42,0.10);
+    --crit-bg: #FCEBEB; --crit-fg: #791F1F;
+    --high-bg: #FAEEDA; --high-fg: #633806;
+    --med-bg:  #EEEDFE; --med-fg:  #3C3489;
+    --low-bg:  #E1F5EE; --low-fg:  #085041;
+    --ai-bg:   #E6F1FB; --ai-fg:   #0C447C;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,Inter,"Segoe UI",sans-serif;
+    color:#0F172A; background:var(--bg); display:flex; }
+  aside { width:240px; min-height:100vh; background:#fff;
+    border-right:0.5px solid var(--border); padding:24px 0; flex-shrink:0; }
+  aside h1 { font-size:18px; font-weight:700; color:var(--blue);
+    margin:0 0 4px 24px; }
+  aside p.tag { font-size:11px; color:#475569; margin:0 0 24px 24px; font-style:italic; }
+  aside nav a { display:block; padding:10px 24px; color:#0F172A; text-decoration:none;
+    font-size:14px; border-left:3px solid transparent; }
+  aside nav a:hover { background:#F6F8FB; }
+  aside nav a.active { border-left-color:var(--blue); font-weight:600;
+    background:var(--ai-bg); color:var(--ai-fg); }
+  aside nav .group { margin-top:18px; padding:8px 24px; font-size:10px;
+    color:#94A3B8; font-weight:700; letter-spacing:0.6px; text-transform:uppercase; }
+  main { flex:1; padding:24px 32px; max-width:1400px; }
+  h2 { font-size:22px; font-weight:700; margin:0 0 4px; }
+  h3 { font-size:14px; font-weight:600; margin:24px 0 8px; color:#475569;
+    text-transform:uppercase; letter-spacing:0.6px; }
+  .sub { color:#64748B; font-size:13px; margin:0 0 24px; }
+  .card { background:var(--card); border:0.5px solid var(--border);
+    border-radius:12px; padding:18px 20px; margin-bottom:16px; }
+  .kpis { display:grid; grid-template-columns:repeat(6, 1fr); gap:12px;
+    margin-bottom:20px; }
+  .kpi { background:var(--card); border:0.5px solid var(--border);
+    border-radius:10px; padding:14px 16px; }
+  .kpi .lbl { font-size:11px; color:#64748B; text-transform:uppercase;
+    letter-spacing:0.6px; }
+  .kpi .val { font-size:28px; font-weight:700; margin-top:6px; font-variant-numeric:tabular-nums; }
+  .kpi.crit .val { color:var(--crit-fg); }
+  .kpi.high .val { color:var(--high-fg); }
+  .ai-card { background:var(--ai-bg); border:0.5px solid #85B7EB;
+    border-radius:10px; padding:14px 16px; }
+  .ai-card .badge { display:inline-block; background:var(--blue); color:#fff;
+    font-size:10px; font-weight:700; padding:2px 8px; border-radius:4px;
+    margin-right:6px; }
+  .ai-card pre { white-space:pre-wrap; font-family:inherit; margin:8px 0 0;
+    font-size:13px; line-height:1.5; color:#0C447C; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th { text-align:left; padding:8px 10px; border-bottom:0.5px solid var(--border);
+    font-size:11px; color:#64748B; text-transform:uppercase;
+    letter-spacing:0.6px; font-weight:600; }
+  td { padding:8px 10px; border-bottom:0.5px solid var(--border);
+    font-variant-numeric:tabular-nums; }
+  tr:hover { background:#F6F8FB; }
+  td a { color:var(--blue); text-decoration:none; }
+  td a:hover { text-decoration:underline; }
+  .pill { display:inline-block; font-size:10px; font-weight:600;
+    padding:2px 8px; border-radius:999px; letter-spacing:0.4px;
+    text-transform:uppercase; }
+  .pill.crit { background:var(--crit-bg); color:var(--crit-fg); }
+  .pill.high { background:var(--high-bg); color:var(--high-fg); }
+  .pill.med { background:var(--med-bg); color:var(--med-fg); }
+  .pill.low { background:var(--low-bg); color:var(--low-fg); }
+  .pill.complete { background:var(--low-bg); color:var(--low-fg); }
+  .pill.dispute { background:var(--high-bg); color:var(--high-fg); }
+  .pill.pending { background:var(--med-bg); color:var(--med-fg); }
+  .right { text-align:right; }
+  .mono { font-family:ui-monospace,"SF Mono",Menlo,monospace; }
+  .tabs { display:flex; gap:6px; margin-bottom:12px; }
+  .tab { padding:6px 14px; border:0.5px solid var(--border);
+    border-radius:999px; font-size:12px; color:#475569; text-decoration:none; }
+  .tab.active { background:var(--ai-bg); color:var(--ai-fg);
+    border-color:#85B7EB; font-weight:600; }
+  .action-card { background:#fff; border:0.5px solid var(--border);
+    border-radius:8px; padding:12px 14px; margin-bottom:8px;
+    display:flex; align-items:center; gap:12px; }
+  .action-card .left { flex:0 0 80px; }
+  .action-card .body { flex:1; }
+  .action-card .title { font-weight:600; font-size:13px; }
+  .action-card .meta { font-size:11px; color:#475569; margin-top:4px; }
+  .action-card .saved { font-weight:700; font-size:14px;
+    font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body>
+<aside>
+  <h1>Maverick</h1>
+  <p class="tag">Inbound freight, in your control</p>
+  <nav>
+    <a href="/"           class="{% if active=='dashboard' %}active{% endif %}">🏠 Dashboard</a>
+    <div class="group">Load Management</div>
+    <a href="/loads"      class="{% if active=='loads' %}active{% endif %}">📦 Load Visibility</a>
+    <a href="/transfers"  class="{% if active=='transfers' %}active{% endif %}">🔁 Transfer Request</a>
+    <div class="group">Containers</div>
+    <a href="/containers" class="{% if active=='containers' %}active{% endif %}">🚢 Containers</a>
+    <div class="group">Invoice Management</div>
+    <a href="/drayage-invoices" class="{% if active=='drayage' %}active{% endif %}">🧾 Drayage Invoice</a>
+    <a href="/customs-invoices" class="{% if active=='customs' %}active{% endif %}">📦 Customs Invoice</a>
+    <a href="/gl"               class="{% if active=='gl' %}active{% endif %}">📊 GL Reconciliation</a>
+    <div class="group">Carriers</div>
+    <a href="/rate-card"  class="{% if active=='rate_card' %}active{% endif %}">🤝 Rate Card</a>
+    <a href="/scorecard"  class="{% if active=='scorecard' %}active{% endif %}">📈 Report (Scorecard)</a>
+    <div class="group">Admin</div>
+    <a href="/users"      class="{% if active=='users' %}active{% endif %}">👥 Users</a>
+  </nav>
+</aside>
+<main>
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

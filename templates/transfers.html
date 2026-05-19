@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% set active = "transfers" %}
+{% block title %}Transfer Requests{% endblock %}
+{% block content %}
+<h2>Transfer Requests</h2>
+<p class="sub">Container-level transfers. Inventory needs come from P4; Maverick handles the logistics layer.</p>
+
+<h3>Active Transfers</h3>
+<table class="card">
+  <thead><tr>
+    <th>Transfer ID</th><th>Mode</th>
+    <th>From</th><th>To</th><th>SKU</th>
+    <th>Equipment Ref</th><th class="right">Est. Cost</th>
+    <th>Status</th><th>Costco PO</th>
+  </tr></thead>
+  <tbody>
+  {% for t in transfers %}
+  <tr>
+    <td class="mono">{{ t.transfer_id }}</td>
+    <td>{{ t.mode }}</td>
+    <td>{{ t.from_dc }}</td>
+    <td>{{ t.to_dc }}</td>
+    <td>{{ t.sku_family }}</td>
+    <td class="mono">{{ t.equipment_ref or "—" }}</td>
+    <td class="right">${{ "{:,.0f}".format(t.est_cost or 0) }}</td>
+    <td><span class="pill {{ 'low' if t.status in ('COMPLETED','APPROVED') else 'pending' }}">{{ t.status }}</span></td>
+    <td>{{ t.costco_po_ref or "—" }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h3>P4 Transfer Needs (pending fulfillment)</h3>
+<table class="card">
+  <thead><tr>
+    <th>P4 Request ID</th><th>From</th><th>To</th>
+    <th>SKU</th><th class="right">Units</th><th>Need-By</th>
+    <th>Costco PO</th><th>Reason</th>
+  </tr></thead>
+  <tbody>
+  {% for n in p4_needs %}
+  <tr>
+    <td class="mono">{{ n.p4_request_id }}</td>
+    <td>{{ n.from_dc }}</td>
+    <td>{{ n.to_dc }}</td>
+    <td>{{ n.sku_family }}</td>
+    <td class="right">{{ "{:,}".format(n.units or 0) }}</td>
+    <td>{{ n.need_by }}</td>
+    <td>{% if n.costco_po_ref %}<span class="pill high">{{ n.costco_po_ref }}</span>{% else %}—{% endif %}</td>
+    <td>{{ n.reason }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

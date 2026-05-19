@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% set active = "containers" %}
+{% block title %}Containers{% endblock %}
+{% block content %}
+<h2>Containers</h2>
+<p class="sub">Asset-centric view. Demurrage and detention math live here.</p>
+
+<div class="kpis">
+  <div class="kpi crit"><div class="lbl">Past LFD</div><div class="val">{{ kpis.units_past_lfd }}</div></div>
+  <div class="kpi high"><div class="lbl">Dwelling &gt;2d at DC</div><div class="val">{{ kpis.units_dwelling_2d }}</div></div>
+  <div class="kpi crit"><div class="lbl">Demurrage exposure</div><div class="val">${{ "{:,.0f}".format(kpis.demurrage_exposure) }}</div></div>
+  <div class="kpi high"><div class="lbl">Detention exposure</div><div class="val">${{ "{:,.0f}".format(kpis.detention_exposure) }}</div></div>
+</div>
+
+<h3>Past LFD / Detention Accruing</h3>
+{% for a in actions if a.category in ['demurrage_avoidance','detention_avoidance'] and a.priority in ['CRITICAL','HIGH','MEDIUM'] %}
+<div class="action-card">
+  <div class="left"><span class="pill {{ 'crit' if a.priority=='CRITICAL' else 'high' if a.priority=='HIGH' else 'med' }}">{{ a.priority }}</span></div>
+  <div class="body">
+    <div class="title"><span class="mono">{{ a.container_no }}</span> — {{ a.action_text }}</div>
+    <div class="meta">{{ a.rationale_text }}</div>
+  </div>
+  <div class="saved">${{ "{:,.0f}".format(a.dollars_saved or 0) }}</div>
+</div>
+{% endfor %}
+
+<h3>Preventive Actions (safe LFD)</h3>
+{% for a in actions if a.priority=='LOW' %}
+<div class="action-card">
+  <div class="left"><span class="pill low">{{ a.priority }}</span></div>
+  <div class="body">
+    <div class="title"><span class="mono">{{ a.container_no }}</span> — {{ a.action_text }}</div>
+    <div class="meta">{{ a.rationale_text }}</div>
+  </div>
+</div>
+{% endfor %}
+
+<h3>All Containers ({{ containers|length }})</h3>
+<table class="card">
+  <thead><tr>
+    <th>Container #</th><th>Vessel</th><th>Stage</th><th>Status</th>
+    <th>LFD</th><th>Pickup</th><th>Days@Loc</th><th>Risk</th>
+  </tr></thead>
+  <tbody>
+  {% for c in containers %}
+  <tr>
+    <td class="mono">{{ c.number }}</td>
+    <td>{{ c.vessel or "—" }}</td>
+    <td>{{ c.stage }}</td>
+    <td>{{ c.container_status or "—" }}</td>
+    <td>{{ c.lfd or "—" }}</td>
+    <td>{{ c.pickup_date or "—" }}</td>
+    <td>{{ c.days_at_location or "—" }}</td>
+    <td>{{ c.demurrage_risk or "—" }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p style="font-size:11px;color:#94A3B8;margin-top:12px;font-style:italic;">
+  All statuses auto-refresh on GPS / EDI 315/322 update. Demo data: hydrated from
+  seeded data — production wires via project44 / Terminal49.
+</p>
+{% endblock %}

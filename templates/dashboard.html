@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% set active = "dashboard" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h2>Dashboard</h2>
+<p class="sub">Your morning glance — what's accruing, what's flagged, what to act on first.</p>
+
+<div class="kpis">
+  <div class="kpi"><div class="lbl">Loads today</div><div class="val">{{ kpis.loads_today }}</div></div>
+  <div class="kpi crit"><div class="lbl">Units past LFD</div><div class="val">{{ kpis.units_past_lfd }}</div></div>
+  <div class="kpi high"><div class="lbl">Units dwelling &gt;2d at DC</div><div class="val">{{ kpis.units_dwelling_2d }}</div></div>
+  <div class="kpi"><div class="lbl">Active invoices</div><div class="val">{{ kpis.active_invoices }}</div></div>
+  <div class="kpi"><div class="lbl">Open exceptions</div><div class="val">{{ kpis.open_exceptions }}</div></div>
+  <div class="kpi crit"><div class="lbl">$ at risk</div><div class="val">${{ "{:,.2f}".format(kpis.at_risk) }}</div></div>
+</div>
+
+<div class="ai-card">
+  <div><span class="badge">AI</span><strong>Exception summary</strong></div>
+  <pre>{{ ai_summary }}</pre>
+</div>
+
+<h3>Recommended actions</h3>
+{% for a in actions %}
+<div class="action-card">
+  <div class="left"><span class="pill {{ 'crit' if a.priority=='CRITICAL' else 'high' if a.priority=='HIGH' else 'med' if a.priority=='MEDIUM' else 'low' }}">{{ a.priority }}</span></div>
+  <div class="body">
+    <div class="title">{{ a.action_text }} — {{ a.container_no }}</div>
+    <div class="meta">{{ a.rationale_text }}</div>
+  </div>
+  <div class="saved">${{ "{:,.0f}".format(a.dollars_saved or 0) }}</div>
+</div>
+{% endfor %}
+{% endblock %}

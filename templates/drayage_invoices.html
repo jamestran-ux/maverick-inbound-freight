@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% set active = "drayage" %}
+{% block title %}Drayage Invoices{% endblock %}
+{% block content %}
+<h2>Drayage Invoices</h2>
+<p class="sub">Default view: invoices requiring manual review. Auto-approved ones are folded below.</p>
+
+<div class="tabs">
+  {% for s in ['Pending Review','In Dispute','Complete','All'] %}
+  <a href="?status={{ s }}" class="tab {% if status_filter==s %}active{% endif %}">
+    {{ s }} ({{ counts.get(s, counts.get('Pending Review', 0) + counts.get('In Dispute', 0) + counts.get('Complete', 0) if s == 'All' else 0) }})
+  </a>
+  {% endfor %}
+</div>
+
+<table class="card">
+  <thead><tr>
+    <th>Invoice #</th><th>Carrier</th><th>FB#</th><th>Container #</th>
+    <th>Lane</th><th class="right">Grand Total</th><th>Status</th><th>Audit Finding</th>
+  </tr></thead>
+  <tbody>
+  {% for i in invoices %}
+  <tr>
+    <td class="mono"><a href="/drayage-invoices/{{ i.invoice_no }}">{{ i.invoice_no }}</a></td>
+    <td>{{ i.carrier_name }}</td>
+    <td class="mono">{{ i.fb_no or "—" }}</td>
+    <td class="mono">{{ i.container_no or "—" }}</td>
+    <td>{{ i.origin }} → {{ i.destination }}</td>
+    <td class="right">${{ "{:,.2f}".format(i.grand_total or 0) }}</td>
+    <td><span class="pill {{ 'pending' if i.status=='Pending Review' else 'dispute' if i.status=='In Dispute' else 'complete' if i.status=='Complete' else 'med' }}">{{ i.status }}</span></td>
+    <td>{{ i.finding_tag or "—" }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

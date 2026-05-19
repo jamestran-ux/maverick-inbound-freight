@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% set active = "loads" %}
+{% block title %}Load Visibility{% endblock %}
+{% block content %}
+<h2>Load Visibility</h2>
+<p class="sub">All inbound loads + pre-arrival pipeline. Sortable, filterable.</p>
+
+<table class="card">
+  <thead><tr>
+    <th>Load ID / FB#</th><th>Container #</th><th>Carrier</th>
+    <th>Origin</th><th>Destination</th><th>Date</th><th>Status</th>
+  </tr></thead>
+  <tbody>
+  {% for l in loads %}
+  <tr>
+    <td class="mono">{{ l.fb_no }}</td>
+    <td class="mono">{{ l.container_no or "—" }}</td>
+    <td>{{ l.carrier_name or "—" }}</td>
+    <td>{{ l.origin or "—" }}</td>
+    <td>{{ l.destination or "—" }}</td>
+    <td>{{ l.shipment_date or "—" }}</td>
+    <td><span class="pill {{ 'crit' if 'Exception' in (l.status or '') else 'med' if l.status in ('Awaiting Discharge','In Customs','Awaiting Release') else 'high' if l.status=='Ready to Outgate' else 'low' if l.status in ('Approved','Completed') else 'pending' }}">{{ l.status or "—" }}</span></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
