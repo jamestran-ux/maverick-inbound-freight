@@ -16,6 +16,10 @@ ROUTES.invoices = function (root, sub) {
 // ---- Drayage list (v5: status tabs + AI auto-approved fold) ----
 let DRAY_FILTERS = { tab: "pending", carrier: "all", severity: "all", search: "" };
 let DRAY_AUTO_EXPAND = false;
+let DRAY_SORT = { col: null, dir: 1 };
+let CUSTOMS_SORT = { col: null, dir: 1 };
+window.setDraySort = function(col){ DRAY_SORT.dir = (DRAY_SORT.col === col) ? -DRAY_SORT.dir : 1; DRAY_SORT.col = col; render(); };
+window.setCustomsSort = function(col){ CUSTOMS_SORT.dir = (CUSTOMS_SORT.col === col) ? -CUSTOMS_SORT.dir : 1; CUSTOMS_SORT.col = col; render(); };
 const DRAY_DISPUTED = new Set();  // populated when user opens a dispute
 
 function drayageTabCounts() {
@@ -37,7 +41,18 @@ function renderDrayageList(root) {
     const q = DRAY_FILTERS.search.toLowerCase();
     rows = rows.filter(r => Object.values(r).some(v => String(v || "").toLowerCase().includes(q)));
   }
+  // Sort: just-uploaded rows ALWAYS come first.
+  // Then by DRAY_SORT if set, else by severity desc then grand_total desc.
   rows.sort((a, b) => {
+    const aUp = JUST_UPLOADED_DRAYAGE.has(a["Invoice #"]) ? 1 : 0;
+    const bUp = JUST_UPLOADED_DRAYAGE.has(b["Invoice #"]) ? 1 : 0;
+    if (aUp !== bUp) return bUp - aUp;
+    if (DRAY_SORT.col) {
+      const av = a[DRAY_SORT.col]; const bv = b[DRAY_SORT.col];
+      const cmp = (av == null) - (bv == null) ||
+        (typeof av === 'number' ? av - bv : String(av || '').localeCompare(String(bv || '')));
+      return cmp * DRAY_SORT.dir;
+    }
     const sa = severityRank((auditByInv[a["Invoice #"]] || {}).Severity);
     const sb = severityRank((auditByInv[b["Invoice #"]] || {}).Severity);
     if (sa !== sb) return sb - sa;
@@ -120,8 +135,14 @@ function renderDrayageList(root) {
         <table class="tbl">
           <thead>
             <tr>
-              <th>Invoice #</th><th>Carrier</th><th>Date</th><th>FB#</th><th>Container</th><th>Lane</th>
-              <th class="num">Grand Total</th><th>Severity</th><th>Status</th><th>Finding</th>
+              <th style="cursor:pointer;" onclick="setDraySort('Invoice #')">Invoice # ${DRAY_SORT.col==='Invoice #' ? (DRAY_SORT.dir>0?'▲':'▼') : '↕'}</th>
+              <th style="cursor:pointer;" onclick="setDraySort('Carrier')">Carrier ${DRAY_SORT.col==='Carrier' ? (DRAY_SORT.dir>0?'▲':'▼') : '↕'}</th>
+              <th style="cursor:pointer;" onclick="setDraySort('Invoice Date')">Date ${DRAY_SORT.col==='Invoice Date' ? (DRAY_SORT.dir>0?'▲':'▼') : '↕'}</th>
+              <th style="cursor:pointer;" onclick="setDraySort('FB# / Load ID')">FB# ${DRAY_SORT.col==='FB# / Load ID' ? (DRAY_SORT.dir>0?'▲':'▼') : '↕'}</th>
+              <th style="cursor:pointer;" onclick="setDraySort('Container #')">Container ${DRAY_SORT.col==='Container #' ? (DRAY_SORT.dir>0?'▲':'▼') : '↕'}</th>
+              <th style="cursor:pointer;" onclick="setDraySort('Origin')">Lane ${DRAY_SORT.col==='Origin' ? (DRAY_SORT.dir>0?'▲':'▼') : '↕'}</th>
+              <th class="num" style="cursor:pointer;" onclick="setDraySort('Grand Total (USD)')">Grand Total ${DRAY_SORT.col==='Grand Total (USD)' ? (DRAY_SORT.dir>0?'▲':'▼') : '↕'}</th>
+              <th>Severity</th><th>Status</th><th>Finding</th>
             </tr>
           </thead>
           <tbody>${rows.length ? rows.map(r => drayRow(r)).join("") : `<tr><td colspan="10" class="empty">No invoices in this view.</td></tr>`}</tbody>
@@ -178,18 +199,18 @@ function drayRow(r) {
     </tr>`;
 }
 
+// Tracks invoices/entries just uploaded so they bubble to the top of lists
+window.JUST_UPLOADED_DRAYAGE = window.JUST_UPLOADED_DRAYAGE || new Set();
+window.JUST_UPLOADED_CUSTOMS = window.JUST_UPLOADED_CUSTOMS || new Set();
+
 window.openUploadModal = function (kind) {
-  // kind: 'drayage' (default) or 'customs'
   kind = kind || 'drayage';
   const isCustoms = kind === 'customs';
   const title = isCustoms ? "Upload Customs Invoice" : "Upload Drayage Invoice";
   const endpoint = isCustoms ? "/api/customs-invoices/upload" : "/api/drayage-invoices/upload";
-  const sampleDray = ["PCD-INV-50001.pdf", "PCD-INV-50016.pdf", "CDS-INV-30103.pdf", "ACS-INV-21003.pdf"];
-  const sampleCustoms = ["LI-US-2026-W19-3318.pdf", "Customs_entry_2026_05.xlsx"];
-  const sample = isCustoms ? sampleCustoms : sampleDray;
   const sub = isCustoms
-    ? "Accepts PDF, Excel (.xlsx, .xls). Maverick parses entry #, container, HTS, duty rate, Section 301/232, MPF, HMF, brokerage. Audit engine validates duty math and broker MSA caps on import."
-    : "Accepts PDF, Excel (.xlsx, .xls). Maverick auto-parses headers, FB#, container, lines, and runs the 9-rule audit on import.";
+    ? "Accepts PDF, Excel (.xlsx, .xls). Maverick parses entry #, container, HTS, duty rate, Section 301/232, MPF, HMF, brokerage. Audit engine validates duty math + brokerage cap on import."
+    : "Accepts PDF, Excel (.xlsx, .xls). Multi-file supported — Maverick auto-parses each and runs the 9-rule audit per invoice.";
 
   openModal(el("div", { class: "modal" }, [
     el("div", { class: "modal-head" }, [
@@ -200,32 +221,33 @@ window.openUploadModal = function (kind) {
       <label for="upl-file-${kind}" style="cursor:pointer;display:block;">
         <div id="upl-zone-${kind}" style="border: 2px dashed #BFD9F2; border-radius: 10px; padding: 28px 20px; text-align: center; background: #F4F9FE; transition: all 0.15s;">
           <div style="font-size: 28px; margin-bottom: 6px;">📄</div>
-          <div style="font-weight: 600;">Click to choose a file · PDF, .xlsx, .xls</div>
-          <div class="muted" style="margin-top: 4px;">Max 25 MB · single file</div>
+          <div style="font-weight: 600;">Click to choose files · PDF, .xlsx, .xls</div>
+          <div class="muted" style="margin-top: 4px;">Multi-select supported · up to 25 files at once</div>
           <div id="upl-fname-${kind}" class="mono" style="margin-top: 10px; font-size: 12px; color: #0C447C;"></div>
         </div>
       </label>
-      <input id="upl-file-${kind}" type="file" accept=".pdf,.xlsx,.xls,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" style="display:none;">
+      <input id="upl-file-${kind}" type="file" multiple accept=".pdf,.xlsx,.xls,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" style="display:none;">
       <div class="muted" style="margin-top: 10px; font-size: 11.5px;">${sub}</div>
-      <div style="margin-top: 14px;">
-        <div class="sec-h">Example filenames</div>
-        <div class="mono" style="font-size: 11.5px; color:#475569;">${sample.join("&nbsp;&nbsp;·&nbsp;&nbsp;")}</div>
-      </div>
       <div id="upl-status-${kind}" style="margin-top: 14px; font-size: 13px;"></div>
+      <div id="upl-results-${kind}" style="margin-top: 10px;"></div>
     ` }),
     el("div", { class: "modal-foot" }, [
-      el("button", { class: "btn secondary", onclick: closeModal }, ["Cancel"]),
+      el("button", { class: "btn secondary", id: `upl-cancel-${kind}`, onclick: closeModal }, ["Cancel"]),
       el("button", { class: "btn", id: `upl-go-${kind}`, onclick: () => uploadInvoice(kind, endpoint) }, ["Upload & Audit"]),
     ]),
   ]));
 
-  // Wire file input → filename display
   setTimeout(() => {
     const inp = document.getElementById(`upl-file-${kind}`);
     if (inp) {
       inp.addEventListener('change', () => {
-        const f = inp.files[0];
-        document.getElementById(`upl-fname-${kind}`).textContent = f ? `✓ ${f.name} (${(f.size/1024).toFixed(0)} KB)` : '';
+        const files = [...inp.files];
+        const fname = document.getElementById(`upl-fname-${kind}`);
+        if (!files.length) { fname.textContent = ''; return; }
+        const totalKB = files.reduce((s, f) => s + f.size, 0) / 1024;
+        fname.innerHTML = files.length === 1
+          ? `✓ ${files[0].name} (${totalKB.toFixed(0)} KB)`
+          : `✓ ${files.length} files selected (${totalKB.toFixed(0)} KB total)`;
       });
     }
   }, 50);
@@ -234,39 +256,55 @@ window.openUploadModal = function (kind) {
 window.uploadInvoice = async function (kind, endpoint) {
   const inp = document.getElementById(`upl-file-${kind}`);
   const status = document.getElementById(`upl-status-${kind}`);
+  const results = document.getElementById(`upl-results-${kind}`);
   const btn = document.getElementById(`upl-go-${kind}`);
   if (!inp || !inp.files.length) {
-    status.innerHTML = '<span style="color:#791F1F;">Pick a file first.</span>';
+    status.innerHTML = '<span style="color:#791F1F;">Pick at least one file.</span>';
     return;
   }
-  const file = inp.files[0];
+  const files = [...inp.files];
   btn.disabled = true;
-  status.innerHTML = '<em style="color:#0C447C;">Uploading and parsing — running 9-rule audit…</em>';
-  const fd = new FormData();
-  fd.append('file', file);
-  try {
-    const res = await fetch(endpoint, { method: 'POST', body: fd });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (data.error) {
-      status.innerHTML = `<span style="color:#791F1F;">Error: ${data.error}</span>`;
-    } else {
+  let succeeded = 0, failed = 0, totalFindings = 0;
+  results.innerHTML = '';
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    status.innerHTML = `<em style="color:#0C447C;">[${i+1}/${files.length}] Parsing ${file.name} — running 9-rule audit…</em>`;
+    const fd = new FormData();
+    fd.append('file', file);
+    const rowDiv = document.createElement('div');
+    rowDiv.style.cssText = 'padding:8px 10px;margin-top:6px;border-radius:6px;font-size:12.5px;line-height:1.5;';
+    results.appendChild(rowDiv);
+    try {
+      const res = await fetch(endpoint, { method: 'POST', body: fd });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
       const findings = (data.findings || []).length;
-      status.innerHTML = `
-        <div style="background:#E1F5EE;padding:12px;border-radius:8px;color:#085041;line-height:1.6;">
-          <strong>✓ ${data.invoice_no || data.entry_no || file.name}</strong> imported<br>
-          ${data.carrier_name ? `Carrier: ${data.carrier_name}<br>` : ''}
-          ${data.grand_total ? `Grand Total: $${(data.grand_total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}<br>` : ''}
-          Extraction confidence: ${((data.extraction_confidence || 0.92) * 100).toFixed(0)}%<br>
-          <strong>Audit findings: ${findings}</strong> · Status: <strong>${data.status || (findings ? 'Pending Review' : 'Complete')}</strong>
-        </div>`;
-      toast(`✓ ${findings} audit findings · status: ${data.status || (findings ? 'Pending Review' : 'Complete')}`);
+      totalFindings += findings;
+      succeeded += 1;
+      const invNo = data.invoice_no || data.entry_no || file.name;
+      // bubble to top of list
+      (kind === 'customs' ? JUST_UPLOADED_CUSTOMS : JUST_UPLOADED_DRAYAGE).add(invNo);
+      rowDiv.style.background = '#E1F5EE'; rowDiv.style.color = '#085041';
+      rowDiv.innerHTML = `<strong>✓ ${invNo}</strong> · ${data.carrier_name || ''} · ${findings} finding${findings === 1 ? '' : 's'} · ${data.status || (findings ? 'Pending Review' : 'Complete')}${data.grand_total ? ` · $${(data.grand_total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}` : ''}`;
+    } catch (e) {
+      failed += 1;
+      rowDiv.style.background = '#FCEBEB'; rowDiv.style.color = '#791F1F';
+      rowDiv.innerHTML = `<strong>✗ ${file.name}</strong> — ${e.message}`;
     }
-  } catch (e) {
-    status.innerHTML = `<span style="color:#791F1F;">Error: ${e.message}</span>`;
-  } finally {
-    btn.disabled = false;
   }
+
+  status.innerHTML = `<div style="background:#E6F1FB;padding:10px;border-radius:8px;color:#0C447C;font-weight:600;">All done — ${succeeded} succeeded, ${failed} failed, ${totalFindings} total audit findings.</div>`;
+  // swap "Upload & Audit" -> "Close" once complete
+  btn.textContent = 'Close';
+  btn.disabled = false;
+  btn.onclick = function () {
+    closeModal();
+    if (typeof render === 'function') render();
+    toast(`${succeeded} invoice${succeeded === 1 ? '' : 's'} audited · ${totalFindings} finding${totalFindings === 1 ? '' : 's'}`);
+  };
+  document.getElementById(`upl-cancel-${kind}`).style.display = 'none';
 };
 
 // ---- Drayage detail ----
@@ -529,10 +567,32 @@ function renderCustomsList(root) {
       <div class="card-body tight">
         <table class="tbl">
           <thead>
-            <tr><th>Entry #</th><th>Container</th><th>PO</th><th class="num">Value</th><th>HTS</th><th>Sec 301</th><th>Sec 232</th><th class="num">Subtotal</th><th>Status</th><th>Finding</th></tr>
+            <tr>
+              <th style="cursor:pointer;" onclick="setCustomsSort('entry')">Entry # ${CUSTOMS_SORT.col==='entry' ? (CUSTOMS_SORT.dir>0?'▲':'▼') : '↕'}</th>
+              <th style="cursor:pointer;" onclick="setCustomsSort('container')">Container ${CUSTOMS_SORT.col==='container' ? (CUSTOMS_SORT.dir>0?'▲':'▼') : '↕'}</th>
+              <th style="cursor:pointer;" onclick="setCustomsSort('po')">PO ${CUSTOMS_SORT.col==='po' ? (CUSTOMS_SORT.dir>0?'▲':'▼') : '↕'}</th>
+              <th class="num" style="cursor:pointer;" onclick="setCustomsSort('value')">Value ${CUSTOMS_SORT.col==='value' ? (CUSTOMS_SORT.dir>0?'▲':'▼') : '↕'}</th>
+              <th style="cursor:pointer;" onclick="setCustomsSort('hts')">HTS ${CUSTOMS_SORT.col==='hts' ? (CUSTOMS_SORT.dir>0?'▲':'▼') : '↕'}</th>
+              <th>Sec 301</th><th>Sec 232</th>
+              <th class="num" style="cursor:pointer;" onclick="setCustomsSort('subtotal')">Subtotal ${CUSTOMS_SORT.col==='subtotal' ? (CUSTOMS_SORT.dir>0?'▲':'▼') : '↕'}</th>
+              <th>Status</th><th>Finding</th>
+            </tr>
           </thead>
           <tbody>
-            ${tabRows.length ? tabRows.map(e => {
+            ${(() => {
+              let sorted = [...tabRows];
+              sorted.sort((a, b) => {
+                const aUp = JUST_UPLOADED_CUSTOMS.has(a.entry) ? 1 : 0;
+                const bUp = JUST_UPLOADED_CUSTOMS.has(b.entry) ? 1 : 0;
+                if (aUp !== bUp) return bUp - aUp;
+                if (CUSTOMS_SORT.col) {
+                  const av = a[CUSTOMS_SORT.col]; const bv = b[CUSTOMS_SORT.col];
+                  const cmp = (typeof av === 'number' ? av - bv : String(av || '').localeCompare(String(bv || '')));
+                  return cmp * CUSTOMS_SORT.dir;
+                }
+                return 0;
+              });
+              return sorted.length ? sorted.map(e => {
               const f = finding(e);
               return `
                 <tr class="clickable" onclick="navigate('invoices/customs/${h(c.invoice)}')">
@@ -547,7 +607,8 @@ function renderCustomsList(root) {
                   <td>${cusStatusPill(e)}</td>
                   <td class="muted" style="font-size: 11px;">${f ? `<span class="mono">${h(f.tag)}</span>` : "—"}</td>
                 </tr>`;
-            }).join("") : `<tr><td colspan="10" class="empty">No entries in this view.</td></tr>`}
+            }).join("") : `<tr><td colspan="10" class="empty">No entries in this view.</td></tr>`;
+            })()}
           </tbody>
         </table>
       </div>

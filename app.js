@@ -847,6 +847,19 @@ function renderLoadDetail(root, invoiceId) {
   const cont = D.containers.find(c => c["Container #"] === inv["Container #"]);
   const po = D.pos.find(p => p["Container #"] === inv["Container #"]);
   const finding = auditByInv[inv["Invoice #"]];
+  // Customs entry matched by container # (D.customs.entries is the master workbook)
+  const customsEntry = (D.customs && D.customs.entries) ? D.customs.entries.find(e => e.container === inv["Container #"]) : null;
+  const customsInvNo = D.customs ? D.customs.invoice : null;
+  const drayStatus = (window.DRAY_DISPUTED && window.DRAY_DISPUTED.has(inv["Invoice #"]))
+    ? '<span class="pill warn">In Dispute</span>'
+    : (finding ? '<span class="pill draft">Pending Review</span>' : '<span class="pill ok">Complete</span>');
+  const customsStatus = customsEntry
+    ? ((window.CUSTOMS_DISPUTED && window.CUSTOMS_DISPUTED.has(customsEntry.entry))
+        ? '<span class="pill warn">In Dispute</span>'
+        : ((window.CUSTOMS_PENDING_ENTRIES && window.CUSTOMS_PENDING_ENTRIES.has(customsEntry.entry))
+            ? '<span class="pill draft">Pending Review</span>'
+            : '<span class="pill ok">Complete</span>'))
+    : null;
 
   root.innerHTML = `
     <div class="row" style="margin-bottom:14px;">
@@ -880,12 +893,51 @@ function renderLoadDetail(root, invoiceId) {
               <dt>Lane criticality</dt><dd>${pill(laneCriticality(inv.Origin, inv.Destination))}</dd>
               <dt>Carrier</dt><dd>${h(inv.Carrier)}</dd>
               <dt>Equipment</dt><dd>${h(inv.Equipment)}</dd>
-              <dt>Drayage invoice</dt><dd><span class="mono"><a onclick="navigate('invoices/drayage/${h(inv["Invoice #"])}')">${h(inv["Invoice #"])}</a></span></dd>
               <dt>Linked PO</dt><dd>${po ? `<span class="mono">${h(po["PO #"])}</span> · ${h(po["SKU Family"])}` : `<span class="muted">— no PO linked —</span>`}</dd>
               <dt>Steamship line</dt><dd>${cont ? h(cont["Steamship Line"]) : "—"}</dd>
               <dt>Vessel</dt><dd>${cont ? h(cont.Vessel) : "—"}</dd>
-              <dt>Grand total</dt><dd><b class="num">${fmt$(inv["Grand Total (USD)"])}</b></dd>
             </dl>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title">Invoices summary</div>
+            <div class="card-sub">Drayage + customs for this load</div>
+          </div>
+          <div class="card-body tight">
+            <table class="tbl">
+              <thead>
+                <tr><th>Type</th><th>Reference</th><th>Carrier / Broker</th><th class="num">Amount</th><th>Status</th><th>Audit</th></tr>
+              </thead>
+              <tbody>
+                <tr class="clickable" onclick="navigate('invoices/drayage/${h(inv["Invoice #"])}')">
+                  <td><span class="pill blue">Drayage</span></td>
+                  <td class="mono"><b>${h(inv["Invoice #"])}</b></td>
+                  <td>${h(inv.Carrier)}</td>
+                  <td class="num mono"><b>${fmt$(inv["Grand Total (USD)"])}</b></td>
+                  <td>${drayStatus}</td>
+                  <td>${finding ? pill(finding.Severity) : '<span class="pill ok">OK</span>'}</td>
+                </tr>
+                ${customsEntry ? `
+                <tr class="clickable" onclick="navigate('invoices/customs/${h(customsInvNo)}')">
+                  <td><span class="pill blue">Customs</span></td>
+                  <td class="mono"><b>${h(customsEntry.entry)}</b></td>
+                  <td>Livingston (broker)</td>
+                  <td class="num mono"><b>${fmt$(customsEntry.subtotal)}</b></td>
+                  <td>${customsStatus}</td>
+                  <td><span class="muted" style="font-size:11px;">duty ${fmt$(customsEntry.duty)}</span></td>
+                </tr>` : `
+                <tr>
+                  <td><span class="pill blue">Customs</span></td>
+                  <td colspan="5" class="muted">— no customs entry linked to this container —</td>
+                </tr>`}
+              </tbody>
+            </table>
+            <div class="muted" style="font-size:11.5px;margin-top:8px;">
+              Combined landed cost: <b class="num">${fmt$((inv["Grand Total (USD)"] || 0) + (customsEntry ? (customsEntry.subtotal || 0) : 0))}</b>
+              ${finding ? ` · <span class="text-red">Audit flagged ${fmt$(finding["$ Impact (USD)"])} at risk</span>` : ""}
+            </div>
           </div>
         </div>
 
