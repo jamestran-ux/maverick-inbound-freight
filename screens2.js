@@ -24,9 +24,10 @@ const DRAY_DISPUTED = new Set();  // populated when user opens a dispute
 
 function drayageTabCounts() {
   const all = D.invoices;
-  const pending  = all.filter(i => auditByInv[i["Invoice #"]] && !DRAY_DISPUTED.has(i["Invoice #"]));
+  const isPending = i => (auditByInv[i["Invoice #"]] || String(i.Status || "").toUpperCase().includes("PENDING")) && !DRAY_DISPUTED.has(i["Invoice #"]);
+  const pending  = all.filter(isPending);
   const disputed = all.filter(i => DRAY_DISPUTED.has(i["Invoice #"]));
-  const complete = all.filter(i => !auditByInv[i["Invoice #"]] && !DRAY_DISPUTED.has(i["Invoice #"]));
+  const complete = all.filter(i => !isPending(i) && !DRAY_DISPUTED.has(i["Invoice #"]));
   return { all, pending, disputed, complete };
 }
 
@@ -203,6 +204,97 @@ function drayRow(r) {
 window.JUST_UPLOADED_DRAYAGE = window.JUST_UPLOADED_DRAYAGE || new Set();
 window.JUST_UPLOADED_CUSTOMS = window.JUST_UPLOADED_CUSTOMS || new Set();
 
+// ─── localStorage persistence for uploaded invoices ──────────────────
+// Survives hard refresh (BUG-1). Stored as { drayage: [...], customs: [...] }
+const MAVERICK_LS_KEY = "maverick_uploads_v1";
+function _loadUploadsFromLS() {
+  try {
+    const raw = localStorage.getItem(MAVERICK_LS_KEY);
+    if (!raw) return { drayage: [], customs: [] };
+    const obj = JSON.parse(raw);
+    return { drayage: obj.drayage || [], customs: obj.customs || [] };
+  } catch (e) { return { drayage: [], customs: [] }; }
+}
+function _saveUploadsToLS() {
+  // Only persist rows the user uploaded — never the seeded set.
+  // We tag uploaded rows with __uploaded:true so we can pluck them back out.
+  const drayage = (D.invoices || []).filter(r => r.__uploaded);
+  const customs = (D.customs?.entries || []).filter(r => r.__uploaded);
+  try {
+    localStorage.setItem(MAVERICK_LS_KEY, JSON.stringify({ drayage, customs }));
+  } catch (e) { console.warn("LS save failed:", e); }
+}
+// Rehydrate on script load — merge any persisted uploads back into D.
+(function _rehydrate() {
+  if (!window.DATA) return;
+  const persisted = _loadUploadsFromLS();
+  D.invoices = D.invoices || [];
+  D.customs = D.customs || { entries: [] };
+  D.customs.entries = D.customs.entries || [];
+  for (const r of persisted.drayage) {
+    if (!D.invoices.some(x => x["Invoice #"] === r["Invoice #"])) {
+      D.invoices.unshift(r);
+    }
+  }
+  for (const r of persisted.customs) {
+    if (!D.customs.entries.some(x => x.entry === r.entry)) {
+      D.customs.entries.unshift(r);
+    }
+  }
+})();
+
+// Ensure a container record exists for newly-uploaded invoices so deep links
+// from audit findings don't 404 (BUG-5/BUG-12). Stub uses neutral defaults.
+function _ensureContainerStub(containerNo, originHint) {
+  if (!containerNo || containerNo === "—" || containerNo === "MULTI") return;
+  if (!D.containers) D.containers = [];
+  if (D.containers.some(c => c["Container #"] === containerNo)) return;
+  D.containers.unshift({
+    "Container #": containerNo,
+    "Steamship Line": "—",
+    "Vessel": "—",
+    "Equipment": "40HC",
+    "Origin Port": originHint || "—",
+    "US Port": "—",
+    "Discharge Date": "",
+    "Customs Status": "Pending",
+    "SSL Released": "—",
+    "LFD": "",
+    "Pickup Date": "",
+    "Free Time (days)": 7,
+    "Stage": "Invoice Pending",
+    "Demurrage Risk": "LOW",
+    "Status": "Linked from uploaded invoice",
+    "Linked PO": "",
+    "Notes": "Auto-created from upload",
+    __uploaded: true,
+  });
+}
+
+// Helper: dedupe + push a drayage invoice row built from upload response.
+// Returns "added" | "replaced".
+function _upsertDrayage(inv) {
+  _ensureContainerStub(inv["Container #"], inv.Origin);
+  const idx = (D.invoices || []).findIndex(x => x["Invoice #"] === inv["Invoice #"]);
+  if (idx >= 0) {
+    D.invoices[idx] = { ...D.invoices[idx], ...inv, __uploaded: true };
+    return "replaced";
+  }
+  D.invoices.unshift({ ...inv, __uploaded: true });
+  return "added";
+}
+// Helper: dedupe + push a customs entry row.
+function _upsertCustomsEntry(e) {
+  _ensureContainerStub(e.container);
+  const idx = (D.customs.entries || []).findIndex(x => x.entry === e.entry);
+  if (idx >= 0) {
+    D.customs.entries[idx] = { ...D.customs.entries[idx], ...e, __uploaded: true };
+    return "replaced";
+  }
+  D.customs.entries.unshift({ ...e, __uploaded: true });
+  return "added";
+}
+
 window.openUploadModal = function (kind) {
   kind = kind || 'drayage';
   const isCustoms = kind === 'customs';
@@ -264,7 +356,7 @@ window.uploadInvoice = async function (kind, endpoint) {
   }
   const files = [...inp.files];
   btn.disabled = true;
-  let succeeded = 0, failed = 0, totalFindings = 0;
+  let succeeded = 0, failed = 0, totalFindings = 0, totalAdded = 0, totalReplaced = 0;
   results.innerHTML = '';
 
   for (let i = 0; i < files.length; i++) {
@@ -283,11 +375,65 @@ window.uploadInvoice = async function (kind, endpoint) {
       const findings = (data.findings || []).length;
       totalFindings += findings;
       succeeded += 1;
-      const invNo = data.invoice_no || data.entry_no || file.name;
-      // bubble to top of list
-      (kind === 'customs' ? JUST_UPLOADED_CUSTOMS : JUST_UPLOADED_DRAYAGE).add(invNo);
+      let addedThis = 0, replacedThis = 0;
+
+      if (kind === 'customs') {
+        // Multi-entry customs Excel: explode into per-entry rows
+        const entries = (data.entries && data.entries.length) ? data.entries : [{
+          entry: data.entry_no || data.invoice_no || file.name,
+          container: data.container_no || "—",
+          po: "—",
+          value: data.grand_total || 0,
+          hts: "—",
+          duty: 0, mpf: 0, hmf: 0,
+          subtotal: data.grand_total || 0,
+          sec301: "—", sec232: "—",
+          notes: `From upload ${file.name}`,
+        }];
+        for (const e of entries) {
+          const result = _upsertCustomsEntry(e);
+          if (result === "added") addedThis++; else replacedThis++;
+          JUST_UPLOADED_CUSTOMS.add(e.entry);
+          if (findings > 0) CUSTOMS_PENDING_ENTRIES.add(e.entry);
+        }
+      } else {
+        // Drayage — may be one record OR multiple (flat Excel)
+        const invs = (data.invoices && data.invoices.length) ? data.invoices : [data];
+        for (const v of invs) {
+          const row = {
+            "Invoice #": v.invoice_no || data.invoice_no,
+            "Carrier": v.carrier_name || data.carrier_name || "Unknown",
+            "Invoice Date": v.invoice_date || data.invoice_date || "",
+            "FB# / Load ID": v.fb_no || data.fb_no || "",
+            "Container #": v.container_no || data.container_no || "",
+            "BOL/MBL #": v.bol || data.bol || "",
+            "Origin": v.origin || data.origin || "",
+            "Destination": v.destination || data.destination || "",
+            "Equipment": "40HC",
+            "Linehaul (USD)": v.base_rate || data.base_rate || 0,
+            "FSC %": v.fsc_pct ? `${Math.round((v.fsc_pct || 0) * 100)}%` : "",
+            "FSC (USD)": v.fsc_amount || data.fsc_amount || 0,
+            "Accessorials (USD)": v.accessorials_total || data.accessorials_total || 0,
+            "Grand Total (USD)": v.grand_total || data.grand_total || 0,
+            "Status": findings ? "PENDING REVIEW" : "COMPLETE",
+            "Audit Finding": findings ? "—" : "—",
+          };
+          const result = _upsertDrayage(row);
+          if (result === "added") addedThis++; else replacedThis++;
+          JUST_UPLOADED_DRAYAGE.add(row["Invoice #"]);
+        }
+      }
+      totalAdded += addedThis;
+      totalReplaced += replacedThis;
+
+      const dupNote = replacedThis ? ` <em style="color:#7a4a00;">(replaced ${replacedThis} duplicate${replacedThis === 1 ? '' : 's'})</em>` : "";
+      const refLabel = (kind === 'customs' && data.entries?.length > 1)
+        ? `${data.invoice_no || data.entry_no} (${data.entries.length} entries)`
+        : (data.invoices?.length > 1
+            ? `${data.invoices.length} invoices`
+            : (data.invoice_no || data.entry_no || file.name));
       rowDiv.style.background = '#E1F5EE'; rowDiv.style.color = '#085041';
-      rowDiv.innerHTML = `<strong>✓ ${invNo}</strong> · ${data.carrier_name || ''} · ${findings} finding${findings === 1 ? '' : 's'} · ${data.status || (findings ? 'Pending Review' : 'Complete')}${data.grand_total ? ` · $${(data.grand_total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}` : ''}`;
+      rowDiv.innerHTML = `<strong>✓ ${refLabel}</strong> · ${data.carrier_name || data.broker || ''} · ${findings} finding${findings === 1 ? '' : 's'} · ${data.status || (findings ? 'Pending Review' : 'Complete')}${data.grand_total ? ` · $${(data.grand_total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}` : ''}${dupNote}`;
     } catch (e) {
       failed += 1;
       rowDiv.style.background = '#FCEBEB'; rowDiv.style.color = '#791F1F';
@@ -295,16 +441,21 @@ window.uploadInvoice = async function (kind, endpoint) {
     }
   }
 
-  status.innerHTML = `<div style="background:#E6F1FB;padding:10px;border-radius:8px;color:#0C447C;font-weight:600;">All done — ${succeeded} succeeded, ${failed} failed, ${totalFindings} total audit findings.</div>`;
-  // swap "Upload & Audit" -> "Close" once complete
+  // Persist everything we added/replaced so a hard refresh keeps them (BUG-1).
+  _saveUploadsToLS();
+
+  const dupSuffix = totalReplaced ? ` · <span style="color:#7a4a00;">${totalReplaced} duplicate${totalReplaced === 1 ? '' : 's'} replaced</span>` : "";
+  status.innerHTML = `<div style="background:#E6F1FB;padding:10px;border-radius:8px;color:#0C447C;font-weight:600;">All done — ${succeeded} succeeded, ${failed} failed, ${totalFindings} total audit findings${dupSuffix}</div>`;
+  // Swap modal foot buttons → single "Close" (BUG-9)
   btn.textContent = 'Close';
   btn.disabled = false;
   btn.onclick = function () {
     closeModal();
     if (typeof render === 'function') render();
-    toast(`${succeeded} invoice${succeeded === 1 ? '' : 's'} audited · ${totalFindings} finding${totalFindings === 1 ? '' : 's'}`);
+    toast(`${totalAdded} added · ${totalReplaced} replaced · ${totalFindings} finding${totalFindings === 1 ? '' : 's'}`);
   };
-  document.getElementById(`upl-cancel-${kind}`).style.display = 'none';
+  const cancelBtn = document.getElementById(`upl-cancel-${kind}`);
+  if (cancelBtn) cancelBtn.style.display = 'none';
 };
 
 // ---- Drayage detail ----

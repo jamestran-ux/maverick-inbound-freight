@@ -447,15 +447,26 @@ ROUTES.dashboard = function (root) {
   }, 30);
 };
 
-function kpiTile(label, value, delta) {
+function kpiTile(label, value, delta, target) {
   const valStr = String(value);
   const cls = valStr.length > 8 ? "kpi-value tiny" : "kpi-value";
+  // Route Dashboard KPI cards to filtered views (BUG-6).
+  const route = target || _kpiRoute(label);
+  const clickable = route ? `style="cursor:pointer;" onclick="navigate('${route}')"` : "";
   return `
-    <div class="kpi">
+    <div class="kpi" ${clickable}>
       <div class="kpi-label">${h(label)}</div>
       <div class="${cls}">${valStr}</div>
       <div class="kpi-delta">${h(delta)}</div>
     </div>`;
+}
+function _kpiRoute(label) {
+  const l = String(label || "").toLowerCase();
+  if (l.includes("$ at risk") || l.includes("audit exception")) return "invoices/drayage";
+  if (l.includes("past lfd") || l.includes("detention")) return "containers";
+  if (l.includes("active invoice")) return "invoices/drayage";
+  if (l.includes("total loads")) return "loads";
+  return null;
 }
 function recoCard(sev, ref, action, reason, target) {
   const cls = { CRITICAL: "crit", HIGH: "high", MEDIUM: "med" }[sev];

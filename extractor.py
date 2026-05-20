@@ -29,20 +29,70 @@ def extract_invoice(file_path: str) -> dict:
 
 
 def _extract_from_excel(xlsx_path: str) -> dict:
-    """Parse an Excel file. Supports two shapes:
-       1. Single-sheet flat invoice (Invoice # in first/header row)
-       2. Multi-sheet workbook (uses 'Invoices' + 'Invoice_Lines' sheets)
-    Returns the same dict shape as PDF extraction.
+    """Parse an Excel file. Supports three shapes:
+       1. Flat multi-invoice list — headers on row 1, one invoice per data row
+       2. Single-sheet flat invoice with side-by-side metadata cells
+       3. Multi-sheet workbook (uses 'Invoices' + 'Invoice_Lines' sheets)
+    Returns the same dict shape as PDF extraction. For shape (1) the primary
+    record gets an 'invoices' list so callers can render N separate rows.
     """
     import openpyxl
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
 
-    # Try multi-sheet structure first
+    # Try multi-sheet structure first (master workbook format)
     if "Invoices" in wb.sheetnames and "Invoice_Lines" in wb.sheetnames:
         return _extract_from_multisheet(wb)
 
-    # Otherwise, treat the first sheet as a flat invoice
     ws = wb.active
+
+    # Shape (1): row 1 looks like column headers; rows 2+ are invoice rows.
+    row1 = [str(ws.cell(row=1, column=c).value or "").strip() for c in range(1, ws.max_column + 1)]
+    row1_lower = [v.lower() for v in row1]
+    if "invoice #" in row1_lower and "grand total (usd)" in row1_lower:
+        col = {row1_lower[i]: i + 1 for i in range(len(row1_lower))}
+
+        def _gv(r, key):
+            idx = col.get(key, 0)
+            return ws.cell(row=r, column=idx).value if idx else None
+
+        invoices_list = []
+        for r in range(2, ws.max_row + 1):
+            inv_no = _gv(r, "invoice #")
+            if not inv_no:
+                continue
+            inv_no_str = str(inv_no).strip()
+            if inv_no_str.lower() in ("invoice #", "invoice number"):
+                continue  # belt-and-suspenders: never ingest the header row
+            base = float(_gv(r, "base rate") or _gv(r, "linehaul (usd)") or 0)
+            fsc_pct_raw = _gv(r, "fsc %") or 0
+            try:
+                fsc_pct = float(str(fsc_pct_raw).replace("%", "")) if fsc_pct_raw else 0
+                if fsc_pct > 1:
+                    fsc_pct = fsc_pct / 100.0
+            except (TypeError, ValueError):
+                fsc_pct = 0
+            invoices_list.append({
+                "invoice_no": inv_no_str,
+                "carrier_name": str(_gv(r, "carrier") or "Unknown"),
+                "invoice_date": str(_gv(r, "invoice date") or ""),
+                "fb_no": str(_gv(r, "fb# / load id") or ""),
+                "container_no": str(_gv(r, "container #") or ""),
+                "bol": str(_gv(r, "bol/mbl #") or ""),
+                "origin": str(_gv(r, "origin") or ""),
+                "destination": str(_gv(r, "destination") or ""),
+                "base_rate": base,
+                "fsc_pct": fsc_pct,
+                "fsc_amount": float(_gv(r, "fsc (usd)") or 0),
+                "accessorials_total": 0.0,
+                "grand_total": float(_gv(r, "grand total (usd)") or 0),
+            })
+        if invoices_list:
+            primary = dict(invoices_list[0])
+            primary["lines"] = []
+            primary["confidence"] = 0.93
+            primary["invoices"] = invoices_list
+            return primary
+        # else fall through to side-by-side metadata path
     invoice_no = None
     carrier_name = "Unknown Carrier"
     invoice_date = None
@@ -146,17 +196,33 @@ def _extract_from_multisheet(wb) -> dict:
     inv_no = ws_inv.cell(row=r, column=inv_h.get("invoice #", 2)).value
     if not inv_no:
         return {"invoice_no": "(empty)", "carrier_name": "Unknown", "lines": [], "grand_total": 0, "confidence": 0.5}
-    # build line items for that invoice
+    # build line items for that invoice — capture customs-entry fields too
+    # when present (entry #, container, PO, HTS, duty, MPF, HMF) so the
+    # customs upload endpoint can return per-entry rows.
     lines = []
     for lr in range(5, ws_lines.max_row + 1):
         if ws_lines.cell(row=lr, column=line_h.get("invoice #", 1)).value != inv_no:
             continue
+        def _get(*keys, default=None):
+            for k in keys:
+                idx = line_h.get(k)
+                if idx:
+                    v = ws_lines.cell(row=lr, column=idx).value
+                    if v is not None:
+                        return v
+            return default
         lines.append({
-            "line_type": str(ws_lines.cell(row=lr, column=line_h.get("type", 3)).value or "SHIPMENT"),
-            "description": str(ws_lines.cell(row=lr, column=line_h.get("description", 6)).value or ""),
-            "qty": float(ws_lines.cell(row=lr, column=line_h.get("qty", 7)).value or 1),
-            "rate": float(ws_lines.cell(row=lr, column=line_h.get("rate", 8)).value or 0),
-            "amount": float(ws_lines.cell(row=lr, column=line_h.get("amount", 12)).value or 0),
+            "line_type": str(_get("type", default="SHIPMENT")),
+            "description": str(_get("description", default="")),
+            "qty": float(_get("qty", default=1) or 1),
+            "rate": float(_get("rate", default=0) or 0),
+            "amount": float(_get("amount", default=0) or 0),
+            "entry": _get("entry #", "entry"),
+            "container": _get("container", "container #"),
+            "po": _get("po", "po #"),
+            "duty": float(_get("duty", default=0) or 0),
+            "mpf": float(_get("mpf", default=0) or 0),
+            "hmf": float(_get("hmf", default=0) or 0),
         })
     return {
         "invoice_no": str(inv_no),

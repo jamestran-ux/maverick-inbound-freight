@@ -326,23 +326,31 @@ def api_upload_drayage():
     # extract
     data = extract_invoice(path)
 
-    # upsert into drayage_invoices
+    # upsert into drayage_invoices — if extractor returned multiple invoices
+    # (flat-list Excel), insert each. Otherwise insert the single record.
+    records_to_insert = data.get("invoices") or [data]
     conn = get_conn()
     try:
+        for rec in records_to_insert:
+            conn.execute(
+                """INSERT OR REPLACE INTO drayage_invoices (invoice_no, carrier_name, invoice_date,
+                    fb_no, container_no, bol, origin, destination, base_rate, fsc_pct, fsc_amount,
+                    accessorials_total, grand_total, status, source_pdf, extraction_confidence)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    rec.get("invoice_no") or data["invoice_no"],
+                    rec.get("carrier_name") or data["carrier_name"],
+                    rec.get("invoice_date"),
+                    rec.get("fb_no"), rec.get("container_no"), rec.get("bol"),
+                    rec.get("origin"), rec.get("destination"),
+                    rec.get("base_rate", 0), rec.get("fsc_pct", 0),
+                    rec.get("fsc_amount", 0), rec.get("accessorials_total", 0),
+                    rec.get("grand_total", 0),
+                    "New", path, data.get("confidence", 1.0),
+                ),
+            )
         conn.execute(
-            """INSERT OR REPLACE INTO drayage_invoices (invoice_no, carrier_name, invoice_date,
-                fb_no, container_no, bol, origin, destination, base_rate, fsc_pct, fsc_amount,
-                accessorials_total, grand_total, status, source_pdf, extraction_confidence)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                data["invoice_no"], data["carrier_name"], data.get("invoice_date"),
-                data.get("fb_no"), data.get("container_no"), data.get("bol"),
-                data.get("origin"), data.get("destination"),
-                data.get("base_rate", 0), data.get("fsc_pct", 0),
-                data.get("fsc_amount", 0), data.get("accessorials_total", 0),
-                data.get("grand_total", 0),
-                "New", path, data.get("confidence", 1.0),
-            ),
+            "SELECT 1",  # no-op so we can keep the existing line-replacement block intact
         )
         # replace lines
         conn.execute("DELETE FROM drayage_invoice_lines WHERE invoice_no = ?",
@@ -360,14 +368,29 @@ def api_upload_drayage():
 
     # run audit
     findings = audit_invoice(data["invoice_no"])
-    return jsonify({
+    # Full record returned so frontend can render the row without re-fetching.
+    # If extractor surfaced multiple invoices (flat-list Excel), pass them all.
+    response = {
         "invoice_no": data["invoice_no"],
         "carrier_name": data["carrier_name"],
+        "invoice_date": data.get("invoice_date"),
+        "fb_no": data.get("fb_no"),
+        "container_no": data.get("container_no"),
+        "bol": data.get("bol"),
+        "origin": data.get("origin"),
+        "destination": data.get("destination"),
+        "base_rate": data.get("base_rate", 0),
+        "fsc_pct": data.get("fsc_pct", 0),
+        "fsc_amount": data.get("fsc_amount", 0),
+        "accessorials_total": data.get("accessorials_total", 0),
         "grand_total": data["grand_total"],
         "extraction_confidence": data.get("confidence"),
         "findings": findings,
         "status": "Pending Review" if findings else "Complete",
-    })
+    }
+    if data.get("invoices"):
+        response["invoices"] = data["invoices"]
+    return jsonify(response)
 
 
 @app.route("/api/customs-invoices/upload", methods=["POST"])
@@ -398,11 +421,37 @@ def api_upload_customs():
                 "dollars_at_risk": round(data.get("grand_total", 0) * 0.02, 2),
                 "description": "High-duty entry — recommend HS code review",
             })
+    # Build per-entry list — for Excel multi-entry uploads, expose each
+    # customs line as its own entry so the frontend can render N rows.
+    entries = []
+    lines = data.get("lines") or []
+    for ln in lines:
+        # heuristic: only treat lines that look like customs entries
+        if ("CUSTOMS" in str(ln.get("line_type", "")).upper()
+                or ln.get("entry") or ln.get("container")):
+            entries.append({
+                "entry": ln.get("entry") or ln.get("description", "")[:40],
+                "container": ln.get("container") or "",
+                "po": ln.get("po") or "",
+                "value": float(ln.get("rate") or ln.get("value") or 0),
+                "hts": ln.get("hts") or "",
+                "duty": float(ln.get("duty") or 0),
+                "mpf": float(ln.get("mpf") or 0),
+                "hmf": float(ln.get("hmf") or 0),
+                "subtotal": float(ln.get("amount") or ln.get("subtotal") or 0),
+                "sec301": ln.get("sec301") or "—",
+                "sec232": ln.get("sec232") or "—",
+                "notes": ln.get("notes") or "",
+            })
     return jsonify({
         "entry_no": data.get("invoice_no"),
-        "carrier_name": data.get("carrier_name"),
+        "invoice_no": data.get("invoice_no"),
+        "carrier_name": data.get("carrier_name") or "Livingston International",
+        "broker": "Livingston International",
+        "invoice_date": data.get("invoice_date"),
         "grand_total": data.get("grand_total", 0),
         "extraction_confidence": data.get("confidence"),
+        "entries": entries,
         "findings": findings,
         "status": "Pending Review" if findings else "Complete",
     })
