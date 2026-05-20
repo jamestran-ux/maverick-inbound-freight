@@ -135,6 +135,96 @@ def _build_pdf(path, header_company, header_addr, header_contact, invoice_no,
     print(f"  wrote {os.path.basename(path)}")
 
 
+def _build_customs_pdf(path, invoice_no, invoice_date, period, terms, entries, grand_total):
+    """Customs broker invoice (Livingston-style). PDF text includes entry #s,
+    container links, HTS, duty stack — same extractor reads it; backend audit
+    fires when grand_total > $50k."""
+    doc = SimpleDocTemplate(
+        path, pagesize=LETTER,
+        leftMargin=0.45 * inch, rightMargin=0.45 * inch,
+        topMargin=0.5 * inch, bottomMargin=0.5 * inch,
+    )
+    s = _styles()
+    story = []
+    header = "LIVINGSTON INTERNATIONAL"
+    story.append(Paragraph(f"<b>{header}</b>  ·  Invoice {invoice_no}", s["Small"]))
+    story.append(Spacer(1, 4))
+    story.append(Paragraph(f"<b>{header} — U.S. Broker Invoice</b>", s["H1Big"]))
+
+    meta = [
+        ["INVOICE #", invoice_no, "Invoice Date", invoice_date],
+        ["", "", "Period", period],
+        ["", "", "Terms", terms],
+    ]
+    t = Table(meta, colWidths=[1.1 * inch, 2.2 * inch, 1.1 * inch, 2.5 * inch])
+    t.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("FONTNAME", (0, 0), (0, 0), "Helvetica-Bold"),
+        ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
+        ("LINEABOVE", (0, 0), (-1, 0), 0.5, colors.grey),
+        ("LINEBELOW", (0, -1), (-1, -1), 0.5, colors.grey),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 6))
+    story.append(Paragraph("1140 Spruce St, Trenton, NJ 08648 · AP@livingstonintl.com · Filer Code 8869", s["Small"]))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph("<b>BILL TO / IMPORTER OF RECORD</b>", s["SmallB"]))
+    story.append(Paragraph("NewAge Products USA, Inc. · EIN 47-1820392", s["Small"]))
+    story.append(Paragraph("3125 Wilson Ave, Perris, CA 92571 · AP: ap.usa@newageproducts.com", s["Small"]))
+    story.append(Spacer(1, 10))
+
+    # Entries table — header starts with "#" so pdfplumber.extract_tables picks it up
+    rows = [["#", "Entry #", "Container", "PO", "Entered Value", "HTS Code",
+             "Duty Rate", "Sec 301", "Sec 232", "Duty", "MPF", "HMF", "Brokerage", "Subtotal"]]
+    for i, e in enumerate(entries, 1):
+        subtotal = round(e["duty"] + e["mpf"] + e["hmf"] + e["brokerage"] + e["disbursement"] + e["isf"], 2)
+        rows.append([
+            str(i), e["entry"], e["container"], e["po"],
+            f"${e['value']:.2f}", e["hts"], e["duty_rate"], e["sec301"], e["sec232"],
+            f"${e['duty']:.2f}", f"${e['mpf']:.2f}", f"${e['hmf']:.2f}",
+            f"${e['brokerage']:.2f}", f"${subtotal:.2f}",
+        ])
+    line_tbl = Table(rows, colWidths=[0.25, 0.6, 0.7, 0.7, 0.7, 0.65, 0.5, 0.4, 0.4, 0.6, 0.45, 0.45, 0.55, 0.65])
+    # convert to inch-friendly widths
+    line_tbl._argW = [w * inch for w in line_tbl._argW]
+    line_tbl.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+        ("FONTSIZE", (0, 0), (-1, -1), 6.5),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eaeaea")),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    story.append(line_tbl)
+    story.append(Spacer(1, 8))
+
+    duty_sum = sum(e["duty"] for e in entries)
+    summary = [
+        ["Total Duty", f"${duty_sum:.2f}"],
+        ["MPF + HMF", f"${sum(e['mpf'] + e['hmf'] for e in entries):.2f}"],
+        ["Brokerage + disbursement + ISF", f"${sum(e['brokerage'] + e['disbursement'] + e['isf'] for e in entries):.2f}"],
+        ["GRAND TOTAL (USD)", f"${grand_total:.2f}"],
+    ]
+    sum_tbl = Table(summary, colWidths=[2.8 * inch, 1.2 * inch], hAlign="RIGHT")
+    sum_tbl.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("LINEABOVE", (0, -1), (-1, -1), 0.75, colors.black),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]))
+    story.append(sum_tbl)
+    story.append(Spacer(1, 10))
+    story.append(Paragraph(
+        "Per CBP Form 7501. Section 301 (China-origin) and Section 232 stack atop HTS base rate. "
+        "Disputes within 30 days per broker MSA §6.4.", s["Small"]))
+
+    doc.build(story)
+    print(f"  wrote {os.path.basename(path)}")
+
+
 def _build_excel(path, rows):
     """Single-sheet flat invoice list — same shape Maverick's _extract_from_excel reads."""
     wb = Workbook()
@@ -205,7 +295,51 @@ def main():
         msa_ref="CDS-NA-MSA-2025-009",
     )
 
-    # Test #3: Excel — two invoices in one file, including an ACS lane
+    # Test #3: Customs broker invoice (Livingston) — high-duty entry to trigger audit
+    _build_customs_pdf(
+        path=os.path.join(HERE, "TEST_LI-99001_customs.pdf"),
+        invoice_no="LI-99001",
+        invoice_date="2026-05-18",
+        period="2026-05-01 to 2026-05-18",
+        terms="Net 30",
+        entries=[
+            {
+                "entry": "LI-99001-A",
+                "container": "ONEU8901234",
+                "po": "PO-NA-25-04481",
+                "value": 184500.00,
+                "hts": "9403.20.0090",
+                "duty_rate": "0.0%",
+                "sec301": "25%",
+                "sec232": "—",
+                "duty": 46125.00,
+                "mpf": 538.40,
+                "hmf": 235.34,
+                "brokerage": 285.00,
+                "disbursement": 95.00,
+                "isf": 35.00,
+            },
+            {
+                "entry": "LI-99001-B",
+                "container": "MSCU7708219",
+                "po": "PO-NA-25-04492",
+                "value": 22400.00,
+                "hts": "7321.11.6000",
+                "duty_rate": "5.7%",
+                "sec301": "25%",
+                "sec232": "—",
+                "duty": 6877.20,
+                "mpf": 78.40,
+                "hmf": 28.56,
+                "brokerage": 175.00,
+                "disbursement": 65.00,
+                "isf": 35.00,
+            },
+        ],
+        grand_total=54571.50,  # > $50k → triggers duty_math_check audit
+    )
+
+    # Test #4: Excel — two invoices in one file, including an ACS lane
     _build_excel(
         path=os.path.join(HERE, "TEST_Bulk_Invoices.xlsx"),
         rows=[
