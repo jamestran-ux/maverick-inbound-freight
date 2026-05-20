@@ -225,6 +225,128 @@ def _build_customs_pdf(path, invoice_no, invoice_date, period, terms, entries, g
     print(f"  wrote {os.path.basename(path)}")
 
 
+def _build_customs_excel(path, broker_invoice_no, invoice_date, period, terms, entries):
+    """Customs broker invoice in Excel form — 10 entries on one sheet.
+    Mirrors the master-workbook customs schema so seed.py / extractor logic
+    can read it. Filename contains 'customs' so backend api_upload_customs
+    flags it as customs and runs the duty-math audit."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Customs_Invoice"
+
+    # Header block — broker invoice meta
+    ws["A1"] = "LIVINGSTON INTERNATIONAL — U.S. Broker Invoice"
+    ws["A2"] = "Invoice #"
+    ws["B2"] = broker_invoice_no
+    ws["A3"] = "Invoice Date"
+    ws["B3"] = invoice_date
+    ws["A4"] = "Period"
+    ws["B4"] = period
+    ws["A5"] = "Bill-To"
+    ws["B5"] = "NewAge Products USA, Inc."
+    ws["A6"] = "Importer of Record"
+    ws["B6"] = "NewAge Products USA, Inc. · EIN 47-1820392"
+    ws["A7"] = "Terms"
+    ws["B7"] = terms
+
+    # Entries table starts row 9
+    headers = [
+        "Entry #", "Container #", "PO #", "Entered Value (USD)", "HTS Code",
+        "Duty Rate", "Sec 301 %", "Sec 232 %", "Duty (USD)", "MPF (USD)",
+        "HMF (USD)", "Brokerage (USD)", "Disbursement (USD)", "ISF (USD)",
+        "Subtotal (USD)", "Notes",
+    ]
+    for col_idx, h in enumerate(headers, 1):
+        ws.cell(row=9, column=col_idx, value=h)
+
+    grand_total = 0.0
+    for i, e in enumerate(entries, 10):
+        subtotal = round(
+            e["duty"] + e["mpf"] + e["hmf"]
+            + e["brokerage"] + e["disbursement"] + e["isf"], 2
+        )
+        grand_total += subtotal
+        ws.cell(row=i, column=1, value=e["entry"])
+        ws.cell(row=i, column=2, value=e["container"])
+        ws.cell(row=i, column=3, value=e["po"])
+        ws.cell(row=i, column=4, value=e["value"])
+        ws.cell(row=i, column=5, value=e["hts"])
+        ws.cell(row=i, column=6, value=e["duty_rate"])
+        ws.cell(row=i, column=7, value=e["sec301"])
+        ws.cell(row=i, column=8, value=e["sec232"])
+        ws.cell(row=i, column=9, value=e["duty"])
+        ws.cell(row=i, column=10, value=e["mpf"])
+        ws.cell(row=i, column=11, value=e["hmf"])
+        ws.cell(row=i, column=12, value=e["brokerage"])
+        ws.cell(row=i, column=13, value=e["disbursement"])
+        ws.cell(row=i, column=14, value=e["isf"])
+        ws.cell(row=i, column=15, value=subtotal)
+        ws.cell(row=i, column=16, value=e.get("notes", ""))
+
+    # Grand-total footer
+    foot_row = 10 + len(entries) + 1
+    ws.cell(row=foot_row, column=14, value="GRAND TOTAL (USD)")
+    ws.cell(row=foot_row, column=15, value=round(grand_total, 2))
+
+    # "Invoices" + "Invoice_Lines" sheets — matches Maverick's multi-sheet
+    # extractor (headers on ROW 4, data starts ROW 5). Lets the backend
+    # extractor pull grand_total + carrier + invoice meta cleanly so the
+    # duty-math audit can fire on grand_total > $50k.
+    ws2 = wb.create_sheet("Invoices")
+    ws2["A1"] = "LIVINGSTON INTERNATIONAL — Customs Broker Invoice"
+    ws2["A2"] = f"Period: {period}"
+    inv_headers = [
+        "#", "Invoice #", "Carrier", "Invoice Date", "FB# / Load ID",
+        "Container #", "BOL/MBL #", "Origin", "Destination", "Rate Type",
+        "Linehaul (USD)", "FSC %", "FSC (USD)", "Accessorials (USD)",
+        "Grand Total (USD)",
+    ]
+    for col_idx, h in enumerate(inv_headers, 1):
+        ws2.cell(row=4, column=col_idx, value=h)
+    ws2.cell(row=5, column=1, value=1)
+    ws2.cell(row=5, column=2, value=broker_invoice_no)
+    ws2.cell(row=5, column=3, value="Livingston International")
+    ws2.cell(row=5, column=4, value=invoice_date)
+    ws2.cell(row=5, column=5, value="—")
+    ws2.cell(row=5, column=6, value="MULTI")
+    ws2.cell(row=5, column=7, value="—")
+    ws2.cell(row=5, column=8, value="Multiple POEs")
+    ws2.cell(row=5, column=9, value="NewAge DCs")
+    ws2.cell(row=5, column=10, value="CUSTOMS")
+    ws2.cell(row=5, column=11, value=round(grand_total, 2))  # linehaul placeholder
+    ws2.cell(row=5, column=12, value=0)
+    ws2.cell(row=5, column=13, value=0)
+    ws2.cell(row=5, column=14, value=0)
+    ws2.cell(row=5, column=15, value=round(grand_total, 2))  # GRAND TOTAL — what audit reads
+
+    ws3 = wb.create_sheet("Invoice_Lines")
+    line_headers = ["#", "Invoice #", "Type", "Entry #", "Container",
+                    "PO", "Description", "Qty", "Rate", "Duty", "MPF", "HMF", "Amount"]
+    for col_idx, h in enumerate(line_headers, 1):
+        ws3.cell(row=4, column=col_idx, value=h)
+    for idx, e in enumerate(entries, 5):
+        subtotal = round(
+            e["duty"] + e["mpf"] + e["hmf"]
+            + e["brokerage"] + e["disbursement"] + e["isf"], 2
+        )
+        ws3.cell(row=idx, column=1, value=idx - 4)
+        ws3.cell(row=idx, column=2, value=broker_invoice_no)
+        ws3.cell(row=idx, column=3, value="CUSTOMS_ENTRY")
+        ws3.cell(row=idx, column=4, value=e["entry"])
+        ws3.cell(row=idx, column=5, value=e["container"])
+        ws3.cell(row=idx, column=6, value=e["po"])
+        ws3.cell(row=idx, column=7, value=f"{e['hts']} · {e.get('notes', '')}".strip(" ·"))
+        ws3.cell(row=idx, column=8, value=1)
+        ws3.cell(row=idx, column=9, value=e["value"])
+        ws3.cell(row=idx, column=10, value=e["duty"])
+        ws3.cell(row=idx, column=11, value=e["mpf"])
+        ws3.cell(row=idx, column=12, value=e["hmf"])
+        ws3.cell(row=idx, column=13, value=subtotal)
+
+    wb.save(path)
+    print(f"  wrote {os.path.basename(path)}  ({len(entries)} entries · grand total ${grand_total:,.2f})")
+
+
 def _build_excel(path, rows):
     """Single-sheet flat invoice list — same shape Maverick's _extract_from_excel reads."""
     wb = Workbook()
@@ -339,7 +461,82 @@ def main():
         grand_total=54571.50,  # > $50k → triggers duty_math_check audit
     )
 
-    # Test #4: Excel — two invoices in one file, including an ACS lane
+    # Test #4: Customs broker invoice in EXCEL — 10 entries (bulk customs upload)
+    _build_customs_excel(
+        path=os.path.join(HERE, "TEST_Customs_Bulk_10_customs.xlsx"),
+        broker_invoice_no="LI-99002",
+        invoice_date="2026-05-18",
+        period="2026-05-04 to 2026-05-18",
+        terms="Net 30",
+        entries=[
+            # 1 — Garage cabinets ex-China (Sec 301 stack)
+            {"entry": "LI-99002-A", "container": "ONEU8901234", "po": "PO-NA-25-04481",
+             "value": 184500.00, "hts": "9403.20.0090", "duty_rate": "0.0%",
+             "sec301": "25%", "sec232": "—",
+             "duty": 46125.00, "mpf": 538.40, "hmf": 235.34,
+             "brokerage": 285.00, "disbursement": 95.00, "isf": 35.00,
+             "notes": "Garage cabinet — Pro 3.0 Series"},
+            # 2 — Kitchen organizers (low duty)
+            {"entry": "LI-99002-B", "container": "MSCU7708219", "po": "PO-NA-25-04492",
+             "value": 22400.00, "hts": "7321.11.6000", "duty_rate": "5.7%",
+             "sec301": "25%", "sec232": "—",
+             "duty": 6877.20, "mpf": 78.40, "hmf": 28.56,
+             "brokerage": 175.00, "disbursement": 65.00, "isf": 35.00},
+            # 3 — Outdoor storage cabinets (Sec 301)
+            {"entry": "LI-99002-C", "container": "OOLU9912345", "po": "PO-NA-25-04503",
+             "value": 145200.00, "hts": "9403.20.0090", "duty_rate": "0.0%",
+             "sec301": "25%", "sec232": "—",
+             "duty": 36300.00, "mpf": 485.00, "hmf": 185.21,
+             "brokerage": 285.00, "disbursement": 95.00, "isf": 35.00},
+            # 4 — Steel shelving (Sec 232 STEEL stack — should flag for review)
+            {"entry": "LI-99002-D", "container": "HLBU4421890", "po": "PO-NA-25-04514",
+             "value": 89750.00, "hts": "7308.30.5050", "duty_rate": "0.0%",
+             "sec301": "25%", "sec232": "50%",
+             "duty": 67312.50, "mpf": 538.40, "hmf": 114.45,
+             "brokerage": 285.00, "disbursement": 95.00, "isf": 35.00,
+             "notes": "STEEL — Sec 232 applies on top of Sec 301"},
+            # 5 — Furniture parts
+            {"entry": "LI-99002-E", "container": "TGHU5678123", "po": "PO-NA-25-04525",
+             "value": 67300.00, "hts": "9403.40.9080", "duty_rate": "0.0%",
+             "sec301": "25%", "sec232": "—",
+             "duty": 16825.00, "mpf": 425.00, "hmf": 85.82,
+             "brokerage": 225.00, "disbursement": 75.00, "isf": 35.00},
+            # 6 — Cooking appliances (HS code drift flagged)
+            {"entry": "LI-99002-F", "container": "COSU8765432", "po": "PO-NA-25-04536",
+             "value": 98500.00, "hts": "7321.11.3000", "duty_rate": "5.7%",
+             "sec301": "25%", "sec232": "—",
+             "duty": 30298.50, "mpf": 538.40, "hmf": 125.62,
+             "brokerage": 285.00, "disbursement": 95.00, "isf": 35.00,
+             "notes": "HS classification under review — possible 7321.11.6000 drift"},
+            # 7 — Mixed furniture (small)
+            {"entry": "LI-99002-G", "container": "CMAU1234567", "po": "PO-NA-25-04547",
+             "value": 54200.00, "hts": "9403.10.0040", "duty_rate": "0.0%",
+             "sec301": "25%", "sec232": "—",
+             "duty": 13550.00, "mpf": 345.00, "hmf": 69.15,
+             "brokerage": 225.00, "disbursement": 75.00, "isf": 35.00},
+            # 8 — Steel structures (Sec 232 again)
+            {"entry": "LI-99002-H", "container": "GESU9876543", "po": "PO-NA-25-04558",
+             "value": 112800.00, "hts": "7308.30.5050", "duty_rate": "0.0%",
+             "sec301": "25%", "sec232": "50%",
+             "duty": 84600.00, "mpf": 538.40, "hmf": 143.90,
+             "brokerage": 285.00, "disbursement": 95.00, "isf": 35.00,
+             "notes": "STEEL — Sec 232 applies"},
+            # 9 — Small garage organizer shipment
+            {"entry": "LI-99002-I", "container": "HMMU5432109", "po": "PO-NA-25-04569",
+             "value": 43100.00, "hts": "9403.20.0090", "duty_rate": "0.0%",
+             "sec301": "25%", "sec232": "—",
+             "duty": 10775.00, "mpf": 275.00, "hmf": 54.99,
+             "brokerage": 225.00, "disbursement": 75.00, "isf": 35.00},
+            # 10 — Garage cabinets (overhead-priced — duty math worth auditing)
+            {"entry": "LI-99002-J", "container": "ZIMU0987654", "po": "PO-NA-25-04580",
+             "value": 78900.00, "hts": "9403.20.0090", "duty_rate": "0.0%",
+             "sec301": "25%", "sec232": "—",
+             "duty": 19725.00, "mpf": 502.85, "hmf": 100.66,
+             "brokerage": 225.00, "disbursement": 75.00, "isf": 35.00},
+        ],
+    )
+
+    # Test #5: Drayage Excel — two invoices in one file, including an ACS lane
     _build_excel(
         path=os.path.join(HERE, "TEST_Bulk_Invoices.xlsx"),
         rows=[
