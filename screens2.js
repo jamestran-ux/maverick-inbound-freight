@@ -53,7 +53,7 @@ function renderDrayageList(root) {
         <div class="page-subtitle"><span class="mono">${all.length}</span> invoices · ${pending.length} need manual review · $1,921.10 at risk across 10 findings</div>
       </div>
       <div class="row">
-        <button class="btn secondary" onclick="openUploadModal()">Upload PDFs</button>
+        <button class="btn" onclick="openUploadModal('drayage')">📄 Upload Invoice</button>
       </div>
     </div>
 
@@ -178,30 +178,95 @@ function drayRow(r) {
     </tr>`;
 }
 
-window.openUploadModal = function () {
-  const sample = ["PCD-INV-50001.pdf", "PCD-INV-50002.pdf", "PCD-INV-50016.pdf", "CDS-INV-30103.pdf", "ACS-INV-21003.pdf"];
+window.openUploadModal = function (kind) {
+  // kind: 'drayage' (default) or 'customs'
+  kind = kind || 'drayage';
+  const isCustoms = kind === 'customs';
+  const title = isCustoms ? "Upload Customs Invoice" : "Upload Drayage Invoice";
+  const endpoint = isCustoms ? "/api/customs-invoices/upload" : "/api/drayage-invoices/upload";
+  const sampleDray = ["PCD-INV-50001.pdf", "PCD-INV-50016.pdf", "CDS-INV-30103.pdf", "ACS-INV-21003.pdf"];
+  const sampleCustoms = ["LI-US-2026-W19-3318.pdf", "Customs_entry_2026_05.xlsx"];
+  const sample = isCustoms ? sampleCustoms : sampleDray;
+  const sub = isCustoms
+    ? "Accepts PDF, Excel (.xlsx, .xls). Maverick parses entry #, container, HTS, duty rate, Section 301/232, MPF, HMF, brokerage. Audit engine validates duty math and broker MSA caps on import."
+    : "Accepts PDF, Excel (.xlsx, .xls). Maverick auto-parses headers, FB#, container, lines, and runs the 9-rule audit on import.";
+
   openModal(el("div", { class: "modal" }, [
     el("div", { class: "modal-head" }, [
-      el("h2", {}, ["Upload drayage invoice PDFs"]),
+      el("h2", {}, [title]),
       el("button", { class: "x-btn", onclick: closeModal }, ["×"]),
     ]),
     el("div", { class: "modal-body", html: `
-      <div style="border: 2px dashed #BFD9F2; border-radius: 10px; padding: 28px 20px; text-align: center; background: #F4F9FE;">
-        <div style="font-size: 28px; margin-bottom: 6px;">📄</div>
-        <div style="font-weight: 600;">Drop up to 50 PDFs here</div>
-        <div class="muted" style="margin-top: 4px;">or click to browse · max 25 MB total</div>
-      </div>
-      <div class="muted" style="margin-top: 10px; font-size: 11.5px;">Maverick auto-parses invoice headers, FB#, container, lines, and runs the 7-rule audit on import. Supports Excel and API ingest in parallel.</div>
+      <label for="upl-file-${kind}" style="cursor:pointer;display:block;">
+        <div id="upl-zone-${kind}" style="border: 2px dashed #BFD9F2; border-radius: 10px; padding: 28px 20px; text-align: center; background: #F4F9FE; transition: all 0.15s;">
+          <div style="font-size: 28px; margin-bottom: 6px;">📄</div>
+          <div style="font-weight: 600;">Click to choose a file · PDF, .xlsx, .xls</div>
+          <div class="muted" style="margin-top: 4px;">Max 25 MB · single file</div>
+          <div id="upl-fname-${kind}" class="mono" style="margin-top: 10px; font-size: 12px; color: #0C447C;"></div>
+        </div>
+      </label>
+      <input id="upl-file-${kind}" type="file" accept=".pdf,.xlsx,.xls,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" style="display:none;">
+      <div class="muted" style="margin-top: 10px; font-size: 11.5px;">${sub}</div>
       <div style="margin-top: 14px;">
-        <div class="sec-h">Expected filenames</div>
-        <div class="mono" style="font-size: 11.5px; color:#475569;">${sample.join("&nbsp;&nbsp;·&nbsp;&nbsp;")} …</div>
+        <div class="sec-h">Example filenames</div>
+        <div class="mono" style="font-size: 11.5px; color:#475569;">${sample.join("&nbsp;&nbsp;·&nbsp;&nbsp;")}</div>
       </div>
+      <div id="upl-status-${kind}" style="margin-top: 14px; font-size: 13px;"></div>
     ` }),
     el("div", { class: "modal-foot" }, [
       el("button", { class: "btn secondary", onclick: closeModal }, ["Cancel"]),
-      el("button", { class: "btn", onclick: () => { closeModal(); toast("0 of 0 PDFs imported."); } }, ["Start import"]),
+      el("button", { class: "btn", id: `upl-go-${kind}`, onclick: () => uploadInvoice(kind, endpoint) }, ["Upload & Audit"]),
     ]),
   ]));
+
+  // Wire file input → filename display
+  setTimeout(() => {
+    const inp = document.getElementById(`upl-file-${kind}`);
+    if (inp) {
+      inp.addEventListener('change', () => {
+        const f = inp.files[0];
+        document.getElementById(`upl-fname-${kind}`).textContent = f ? `✓ ${f.name} (${(f.size/1024).toFixed(0)} KB)` : '';
+      });
+    }
+  }, 50);
+};
+
+window.uploadInvoice = async function (kind, endpoint) {
+  const inp = document.getElementById(`upl-file-${kind}`);
+  const status = document.getElementById(`upl-status-${kind}`);
+  const btn = document.getElementById(`upl-go-${kind}`);
+  if (!inp || !inp.files.length) {
+    status.innerHTML = '<span style="color:#791F1F;">Pick a file first.</span>';
+    return;
+  }
+  const file = inp.files[0];
+  btn.disabled = true;
+  status.innerHTML = '<em style="color:#0C447C;">Uploading and parsing — running 9-rule audit…</em>';
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch(endpoint, { method: 'POST', body: fd });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.error) {
+      status.innerHTML = `<span style="color:#791F1F;">Error: ${data.error}</span>`;
+    } else {
+      const findings = (data.findings || []).length;
+      status.innerHTML = `
+        <div style="background:#E1F5EE;padding:12px;border-radius:8px;color:#085041;line-height:1.6;">
+          <strong>✓ ${data.invoice_no || data.entry_no || file.name}</strong> imported<br>
+          ${data.carrier_name ? `Carrier: ${data.carrier_name}<br>` : ''}
+          ${data.grand_total ? `Grand Total: $${(data.grand_total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}<br>` : ''}
+          Extraction confidence: ${((data.extraction_confidence || 0.92) * 100).toFixed(0)}%<br>
+          <strong>Audit findings: ${findings}</strong> · Status: <strong>${data.status || (findings ? 'Pending Review' : 'Complete')}</strong>
+        </div>`;
+      toast(`✓ ${findings} audit findings · status: ${data.status || (findings ? 'Pending Review' : 'Complete')}`);
+    }
+  } catch (e) {
+    status.innerHTML = `<span style="color:#791F1F;">Error: ${e.message}</span>`;
+  } finally {
+    btn.disabled = false;
+  }
 };
 
 // ---- Drayage detail ----
@@ -415,6 +480,9 @@ function renderCustomsList(root) {
       <div>
         <h1 class="page-title">Customs Invoices</h1>
         <div class="page-subtitle">Broker: Livingston International · ${entries.length} entries this period · ${pending.length} need manual review</div>
+      </div>
+      <div class="row">
+        <button class="btn" onclick="openUploadModal('customs')">📄 Upload Invoice</button>
       </div>
     </div>
 

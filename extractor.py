@@ -14,13 +14,167 @@ import pdfplumber
 ANTHROPIC_AVAILABLE = bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 
-def extract_invoice(pdf_path: str) -> dict:
+def extract_invoice(file_path: str) -> dict:
+    """Extract invoice data from a PDF or Excel file."""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in (".xlsx", ".xls"):
+        return _extract_from_excel(file_path)
+    # default = PDF path
     if ANTHROPIC_AVAILABLE:
         try:
-            return _extract_via_anthropic(pdf_path)
+            return _extract_via_anthropic(file_path)
         except Exception as e:
             print(f"  [warn] Anthropic extraction failed: {e}; falling back to regex")
-    return _extract_via_regex(pdf_path)
+    return _extract_via_regex(file_path)
+
+
+def _extract_from_excel(xlsx_path: str) -> dict:
+    """Parse an Excel file. Supports two shapes:
+       1. Single-sheet flat invoice (Invoice # in first/header row)
+       2. Multi-sheet workbook (uses 'Invoices' + 'Invoice_Lines' sheets)
+    Returns the same dict shape as PDF extraction.
+    """
+    import openpyxl
+    wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+
+    # Try multi-sheet structure first
+    if "Invoices" in wb.sheetnames and "Invoice_Lines" in wb.sheetnames:
+        return _extract_from_multisheet(wb)
+
+    # Otherwise, treat the first sheet as a flat invoice
+    ws = wb.active
+    invoice_no = None
+    carrier_name = "Unknown Carrier"
+    invoice_date = None
+    fb_no = None
+    container_no = None
+    bol = None
+    origin = None
+    destination = None
+    base_rate = 0.0
+    fsc_pct = 0.0
+    fsc_amount = 0.0
+    grand_total = 0.0
+    lines = []
+
+    # Scan first 20 rows for header metadata
+    for r in range(1, min(25, ws.max_row + 1)):
+        for c in range(1, min(10, ws.max_column + 1)):
+            v = ws.cell(row=r, column=c).value
+            if not v: continue
+            sv = str(v).strip().lower()
+            nxt = ws.cell(row=r, column=c+1).value
+            if "invoice #" in sv or "invoice number" in sv:
+                invoice_no = str(nxt) if nxt else None
+            elif "carrier" in sv and not carrier_name.startswith("Pacific"):
+                carrier_name = str(nxt) if nxt else carrier_name
+            elif "invoice date" in sv:
+                invoice_date = str(nxt) if nxt else None
+
+    # If sheet has a header row matching the Invoice_Lines pattern, parse lines
+    header_row = None
+    for r in range(1, min(15, ws.max_row + 1)):
+        headers = [str(ws.cell(row=r, column=c).value or "").strip().lower() for c in range(1, ws.max_column + 1)]
+        if "type" in headers and "description" in headers and ("amount" in headers or "rate" in headers):
+            header_row = r
+            break
+
+    if header_row:
+        col_idx = {(ws.cell(row=header_row, column=c).value or "").strip().lower(): c
+                   for c in range(1, ws.max_column + 1)}
+        for r in range(header_row + 1, ws.max_row + 1):
+            t = ws.cell(row=r, column=col_idx.get("type", 0)).value if col_idx.get("type") else None
+            if not t: continue
+            line_type = "SHIPMENT" if "shipment" in str(t).lower() else "ACCESSORIAL"
+            desc = ws.cell(row=r, column=col_idx.get("description", 0)).value if col_idx.get("description") else None
+            qty = ws.cell(row=r, column=col_idx.get("qty", 0)).value if col_idx.get("qty") else 1
+            rate = ws.cell(row=r, column=col_idx.get("rate", 0)).value if col_idx.get("rate") else 0
+            amount = ws.cell(row=r, column=col_idx.get("amount", 0)).value if col_idx.get("amount") else 0
+            try: qty_f = float(qty or 1)
+            except: qty_f = 1
+            try: rate_f = float(rate or 0)
+            except: rate_f = 0
+            try: amount_f = float(amount or 0)
+            except: amount_f = 0
+            lines.append({"line_type": line_type, "description": str(desc) if desc else "",
+                          "qty": qty_f, "rate": rate_f, "amount": amount_f})
+            if line_type == "SHIPMENT" and not base_rate:
+                base_rate = ws.cell(row=r, column=col_idx.get("linehaul", 0)).value if col_idx.get("linehaul") else rate_f
+                base_rate = float(base_rate or rate_f)
+                fsc_amt_cell = ws.cell(row=r, column=col_idx.get("fsc $", 0)).value if col_idx.get("fsc $") else 0
+                fsc_amount = float(fsc_amt_cell or 0)
+                fsc_pct_cell = ws.cell(row=r, column=col_idx.get("fsc %", 0)).value if col_idx.get("fsc %") else None
+                if fsc_pct_cell:
+                    s = str(fsc_pct_cell).replace("%", "").strip()
+                    try: fsc_pct = float(s) / 100.0 if float(s) > 1 else float(s)
+                    except: fsc_pct = 0
+                if not fb_no:
+                    fb_no = ws.cell(row=r, column=col_idx.get("fb#", 0)).value if col_idx.get("fb#") else None
+                if not container_no:
+                    container_no = ws.cell(row=r, column=col_idx.get("container #", 0)).value if col_idx.get("container #") else None
+
+    grand_total = sum(l["amount"] for l in lines) + fsc_amount + base_rate
+    accessorials_total = sum(l["amount"] for l in lines if l["line_type"] == "ACCESSORIAL")
+
+    return {
+        "invoice_no": invoice_no or os.path.basename(xlsx_path).replace(".xlsx", "").replace(".xls", ""),
+        "carrier_name": carrier_name,
+        "invoice_date": invoice_date,
+        "fb_no": str(fb_no) if fb_no else None,
+        "container_no": str(container_no) if container_no else None,
+        "bol": None,
+        "origin": None,
+        "destination": None,
+        "base_rate": base_rate,
+        "fsc_pct": fsc_pct,
+        "fsc_amount": fsc_amount,
+        "accessorials_total": accessorials_total,
+        "grand_total": grand_total,
+        "lines": lines,
+        "confidence": 0.88,
+    }
+
+
+def _extract_from_multisheet(wb) -> dict:
+    """If the user uploads our master workbook (multi-sheet), extract the FIRST invoice."""
+    ws_inv = wb["Invoices"]
+    ws_lines = wb["Invoice_Lines"]
+    inv_h = {(ws_inv.cell(row=4, column=c).value or "").strip().lower(): c for c in range(1, ws_inv.max_column + 1)}
+    line_h = {(ws_lines.cell(row=4, column=c).value or "").strip().lower(): c for c in range(1, ws_lines.max_column + 1)}
+    # take first invoice row
+    r = 5
+    inv_no = ws_inv.cell(row=r, column=inv_h.get("invoice #", 2)).value
+    if not inv_no:
+        return {"invoice_no": "(empty)", "carrier_name": "Unknown", "lines": [], "grand_total": 0, "confidence": 0.5}
+    # build line items for that invoice
+    lines = []
+    for lr in range(5, ws_lines.max_row + 1):
+        if ws_lines.cell(row=lr, column=line_h.get("invoice #", 1)).value != inv_no:
+            continue
+        lines.append({
+            "line_type": str(ws_lines.cell(row=lr, column=line_h.get("type", 3)).value or "SHIPMENT"),
+            "description": str(ws_lines.cell(row=lr, column=line_h.get("description", 6)).value or ""),
+            "qty": float(ws_lines.cell(row=lr, column=line_h.get("qty", 7)).value or 1),
+            "rate": float(ws_lines.cell(row=lr, column=line_h.get("rate", 8)).value or 0),
+            "amount": float(ws_lines.cell(row=lr, column=line_h.get("amount", 12)).value or 0),
+        })
+    return {
+        "invoice_no": str(inv_no),
+        "carrier_name": str(ws_inv.cell(row=r, column=inv_h.get("carrier", 3)).value or "Unknown"),
+        "invoice_date": str(ws_inv.cell(row=r, column=inv_h.get("invoice date", 4)).value or ""),
+        "fb_no": str(ws_inv.cell(row=r, column=inv_h.get("fb# / load id", 5)).value or ""),
+        "container_no": str(ws_inv.cell(row=r, column=inv_h.get("container #", 6)).value or ""),
+        "bol": None,
+        "origin": str(ws_inv.cell(row=r, column=inv_h.get("origin", 8)).value or ""),
+        "destination": str(ws_inv.cell(row=r, column=inv_h.get("destination", 9)).value or ""),
+        "base_rate": float(ws_inv.cell(row=r, column=inv_h.get("linehaul (usd)", 11)).value or 0),
+        "fsc_pct": 0.22,
+        "fsc_amount": float(ws_inv.cell(row=r, column=inv_h.get("fsc (usd)", 13)).value or 0),
+        "accessorials_total": float(ws_inv.cell(row=r, column=inv_h.get("accessorials (usd)", 14)).value or 0),
+        "grand_total": float(ws_inv.cell(row=r, column=inv_h.get("grand total (usd)", 15)).value or 0),
+        "lines": lines,
+        "confidence": 0.95,
+    }
 
 
 # ----- deterministic regex path -----

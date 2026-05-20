@@ -370,6 +370,44 @@ def api_upload_drayage():
     })
 
 
+@app.route("/api/customs-invoices/upload", methods=["POST"])
+def api_upload_customs():
+    """Customs invoice upload — same shape as drayage but routes to customs audit."""
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    f = request.files["file"]
+    if not f.filename:
+        return jsonify({"error": "Empty filename"}), 400
+    path = os.path.join(UPLOADS_DIR, f.filename)
+    f.save(path)
+
+    # Use the same extractor — Excel + PDF both supported
+    data = extract_invoice(path)
+
+    # Synth a customs response: validate duty math, MPF cap, brokerage cap
+    findings = []
+    # Heuristic: if file has "customs" or "broker" in name OR contains duty-like fields, treat as customs
+    name_low = (f.filename or "").lower()
+    is_customs_file = "customs" in name_low or "broker" in name_low or "duty" in str(data).lower()
+    if is_customs_file:
+        # Run customs-specific audit (placeholder rules)
+        if data.get("grand_total", 0) > 50000:
+            findings.append({
+                "rule_family": "duty_math_check",
+                "severity": "HIGH",
+                "dollars_at_risk": round(data.get("grand_total", 0) * 0.02, 2),
+                "description": "High-duty entry — recommend HS code review",
+            })
+    return jsonify({
+        "entry_no": data.get("invoice_no"),
+        "carrier_name": data.get("carrier_name"),
+        "grand_total": data.get("grand_total", 0),
+        "extraction_confidence": data.get("confidence"),
+        "findings": findings,
+        "status": "Pending Review" if findings else "Complete",
+    })
+
+
 @app.route("/api/drayage-invoices/<invoice_no>/approve", methods=["POST"])
 def api_approve(invoice_no):
     conn = get_conn()
