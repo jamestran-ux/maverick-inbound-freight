@@ -430,18 +430,20 @@ def api_upload_customs():
         if ("CUSTOMS" in str(ln.get("line_type", "")).upper()
                 or ln.get("entry") or ln.get("container")):
             entries.append({
-                "entry": ln.get("entry") or ln.get("description", "")[:40],
-                "container": ln.get("container") or "",
-                "po": ln.get("po") or "",
+                "entry": str(ln.get("entry") or ln.get("description", "")[:40]),
+                "container": str(ln.get("container") or ""),
+                "po": str(ln.get("po") or ""),
                 "value": float(ln.get("rate") or ln.get("value") or 0),
-                "hts": ln.get("hts") or "",
+                "hts": str(ln.get("hts") or ""),
+                "dutyRate": str(ln.get("duty_rate") or ln.get("dutyRate") or ""),
                 "duty": float(ln.get("duty") or 0),
                 "mpf": float(ln.get("mpf") or 0),
                 "hmf": float(ln.get("hmf") or 0),
+                "brokerage": float(ln.get("brokerage") or 0),
                 "subtotal": float(ln.get("amount") or ln.get("subtotal") or 0),
-                "sec301": ln.get("sec301") or "—",
-                "sec232": ln.get("sec232") or "—",
-                "notes": ln.get("notes") or "",
+                "sec301": str(ln.get("sec301") or "—"),
+                "sec232": str(ln.get("sec232") or "—"),
+                "notes": str(ln.get("notes") or ""),
             })
     return jsonify({
         "entry_no": data.get("invoice_no"),

@@ -175,8 +175,23 @@ function drayTab(key, label, count) {
 
 function drayStatusPill(r) {
   if (DRAY_DISPUTED.has(r["Invoice #"])) return '<span class="pill warn">In Dispute</span>';
-  if (auditByInv[r["Invoice #"]]) return '<span class="pill draft">Pending Review</span>';
+  // BUG-14: trust either auditByInv lookup OR the persisted Status field.
+  if (auditByInv[r["Invoice #"]] || String(r.Status || "").toUpperCase().includes("PENDING"))
+    return '<span class="pill draft">Pending Review</span>';
   return '<span class="pill ok">Complete</span>';
+}
+
+// Carrier name normalization (BUG-25). Folds uppercase / variant spellings
+// of carrier names into the canonical seed-data names so the short-code
+// dictionary CARRIER_SHORT can resolve them.
+function _normalizeCarrier(name) {
+  if (!name) return "Unknown";
+  const upper = String(name).toUpperCase();
+  if (upper.includes("PACIFIC COASTLINE")) return "Pacific Coastline Drayage Inc.";
+  if (upper.includes("CONTINENTAL DRAYAGE")) return "Continental Drayage Solutions, Llc";
+  if (upper.includes("ATLANTIC CONTAINER")) return "Atlantic Container Services, Inc.";
+  if (upper.includes("LIVINGSTON")) return "Livingston International";
+  return String(name);
 }
 
 function chip(label, value, current, count) {
@@ -205,32 +220,55 @@ window.JUST_UPLOADED_DRAYAGE = window.JUST_UPLOADED_DRAYAGE || new Set();
 window.JUST_UPLOADED_CUSTOMS = window.JUST_UPLOADED_CUSTOMS || new Set();
 
 // ─── localStorage persistence for uploaded invoices ──────────────────
-// Survives hard refresh (BUG-1). Stored as { drayage: [...], customs: [...] }
-const MAVERICK_LS_KEY = "maverick_uploads_v1";
+// Survives hard refresh (BUG-1, BUG-14, BUG-17). Stored as:
+//   { drayage: [...], customs: [...], containers: [...],
+//     auditFindings: {invNo: {...}}, customsPending: [...], customsDisputed: [...] }
+// Audit findings are kept on the persisted side so Pending/Complete classification
+// is deterministic across reloads (BUG-14).
+const MAVERICK_LS_KEY = "maverick_uploads_v2";
 function _loadUploadsFromLS() {
   try {
     const raw = localStorage.getItem(MAVERICK_LS_KEY);
-    if (!raw) return { drayage: [], customs: [] };
+    if (!raw) return { drayage: [], customs: [], containers: [], auditFindings: {}, customsPending: [], customsDisputed: [] };
     const obj = JSON.parse(raw);
-    return { drayage: obj.drayage || [], customs: obj.customs || [] };
-  } catch (e) { return { drayage: [], customs: [] }; }
+    return {
+      drayage: obj.drayage || [],
+      customs: obj.customs || [],
+      containers: obj.containers || [],
+      auditFindings: obj.auditFindings || {},
+      customsPending: obj.customsPending || [],
+      customsDisputed: obj.customsDisputed || [],
+    };
+  } catch (e) { return { drayage: [], customs: [], containers: [], auditFindings: {}, customsPending: [], customsDisputed: [] }; }
 }
 function _saveUploadsToLS() {
-  // Only persist rows the user uploaded — never the seeded set.
-  // We tag uploaded rows with __uploaded:true so we can pluck them back out.
+  // Persist only user-uploaded rows + the audit findings attached to them.
   const drayage = (D.invoices || []).filter(r => r.__uploaded);
   const customs = (D.customs?.entries || []).filter(r => r.__uploaded);
+  const containers = (D.containers || []).filter(r => r.__uploaded);
+  const auditFindings = {};
+  for (const inv of drayage) {
+    const f = auditByInv[inv["Invoice #"]];
+    if (f && f.__uploaded) auditFindings[inv["Invoice #"]] = f;
+  }
+  const customsPending = Array.from(CUSTOMS_PENDING_ENTRIES).filter(id => customs.some(c => c.entry === id));
+  const customsDisputed = Array.from(CUSTOMS_DISPUTED).filter(id => customs.some(c => c.entry === id));
   try {
-    localStorage.setItem(MAVERICK_LS_KEY, JSON.stringify({ drayage, customs }));
+    localStorage.setItem(MAVERICK_LS_KEY, JSON.stringify({
+      drayage, customs, containers, auditFindings, customsPending, customsDisputed,
+    }));
   } catch (e) { console.warn("LS save failed:", e); }
 }
-// Rehydrate on script load — merge any persisted uploads back into D.
+// Rehydrate on script load — merge any persisted uploads back into D and
+// repopulate auditByInv / pending sets so the Pending/Complete classifier
+// stays stable across F5 (BUG-14).
 (function _rehydrate() {
   if (!window.DATA) return;
   const persisted = _loadUploadsFromLS();
   D.invoices = D.invoices || [];
   D.customs = D.customs || { entries: [] };
   D.customs.entries = D.customs.entries || [];
+  D.containers = D.containers || [];
   for (const r of persisted.drayage) {
     if (!D.invoices.some(x => x["Invoice #"] === r["Invoice #"])) {
       D.invoices.unshift(r);
@@ -241,6 +279,21 @@ function _saveUploadsToLS() {
       D.customs.entries.unshift(r);
     }
   }
+  for (const r of persisted.containers) {
+    if (!D.containers.some(x => x["Container #"] === r["Container #"])) {
+      D.containers.unshift(r);
+    }
+  }
+  // Replay audit findings so auditByInv has them BEFORE first render (BUG-14).
+  // app.js (where auditByInv is defined) loads before screens2.js so this is
+  // safe to do synchronously.
+  if (typeof auditByInv !== "undefined") {
+    for (const [invNo, f] of Object.entries(persisted.auditFindings)) {
+      auditByInv[invNo] = f;
+    }
+  }
+  for (const id of persisted.customsPending) CUSTOMS_PENDING_ENTRIES.add(id);
+  for (const id of persisted.customsDisputed) CUSTOMS_DISPUTED.add(id);
 })();
 
 // Ensure a container record exists for newly-uploaded invoices so deep links
@@ -378,31 +431,58 @@ window.uploadInvoice = async function (kind, endpoint) {
       let addedThis = 0, replacedThis = 0;
 
       if (kind === 'customs') {
-        // Multi-entry customs Excel: explode into per-entry rows
+        // Multi-entry customs Excel/PDF: explode into per-entry rows
         const entries = (data.entries && data.entries.length) ? data.entries : [{
           entry: data.entry_no || data.invoice_no || file.name,
           container: data.container_no || "—",
           po: "—",
           value: data.grand_total || 0,
           hts: "—",
-          duty: 0, mpf: 0, hmf: 0,
+          dutyRate: "",
+          duty: 0, mpf: 0, hmf: 0, brokerage: 0,
           subtotal: data.grand_total || 0,
           sec301: "—", sec232: "—",
           notes: `From upload ${file.name}`,
         }];
+        // For multi-entry uploads, divide the broker-level finding budget across entries
+        const perEntryFinding = findings > 0 && entries.length > 0
+          ? { severity: data.findings[0]?.severity || "MED", rule: data.findings[0]?.rule_family || "duty_math_check", impact: (data.findings[0]?.dollars_at_risk || 0) / entries.length }
+          : null;
         for (const e of entries) {
-          const result = _upsertCustomsEntry(e);
+          // Normalize incoming shape (extractor + backend variations)
+          const entryRow = {
+            entry: e.entry,
+            container: e.container || "",
+            po: e.po || "",
+            value: e.value || 0,
+            hts: e.hts || "—",
+            dutyRate: e.dutyRate || e.duty_rate || "",
+            duty: e.duty || 0,
+            mpf: e.mpf || 0,
+            hmf: e.hmf || 0,
+            brokerage: e.brokerage || 0,
+            subtotal: e.subtotal || 0,
+            sec301: e.sec301 || "—",
+            sec232: e.sec232 || "—",
+            notes: e.notes || "",
+          };
+          const result = _upsertCustomsEntry(entryRow);
           if (result === "added") addedThis++; else replacedThis++;
-          JUST_UPLOADED_CUSTOMS.add(e.entry);
-          if (findings > 0) CUSTOMS_PENDING_ENTRIES.add(e.entry);
+          JUST_UPLOADED_CUSTOMS.add(entryRow.entry);
+          if (findings > 0) CUSTOMS_PENDING_ENTRIES.add(entryRow.entry);
         }
       } else {
         // Drayage — may be one record OR multiple (flat Excel)
         const invs = (data.invoices && data.invoices.length) ? data.invoices : [data];
         for (const v of invs) {
+          const rawCarrier = v.carrier_name || data.carrier_name || "Unknown";
+          // Normalize carrier names — uppercase variants like "PACIFIC COASTLINE
+          // DRAYAGE INC." get folded to the seed-data canonical name (BUG-25).
+          const canonicalCarrier = _normalizeCarrier(rawCarrier);
+          const invNo = v.invoice_no || data.invoice_no;
           const row = {
-            "Invoice #": v.invoice_no || data.invoice_no,
-            "Carrier": v.carrier_name || data.carrier_name || "Unknown",
+            "Invoice #": invNo,
+            "Carrier": canonicalCarrier,
             "Invoice Date": v.invoice_date || data.invoice_date || "",
             "FB# / Load ID": v.fb_no || data.fb_no || "",
             "Container #": v.container_no || data.container_no || "",
@@ -421,6 +501,20 @@ window.uploadInvoice = async function (kind, endpoint) {
           const result = _upsertDrayage(row);
           if (result === "added") addedThis++; else replacedThis++;
           JUST_UPLOADED_DRAYAGE.add(row["Invoice #"]);
+
+          // Persist audit finding for this invoice into auditByInv so the
+          // Pending/Complete classifier sees it after F5 (BUG-14).
+          if (findings && data.findings && data.findings.length) {
+            const top = data.findings[0];
+            auditByInv[invNo] = {
+              "Invoice #": invNo,
+              "Rule Family": top.rule_family || "audit_finding",
+              "Severity": String(top.severity || "MED").toUpperCase(),
+              "What's Wrong": top.description || "",
+              "$ Impact (USD)": Number(top.dollars_at_risk || 0),
+              __uploaded: true,
+            };
+          }
         }
       }
       totalAdded += addedThis;
@@ -641,10 +735,12 @@ const CUSTOMS_DISPUTED = new Set();
 // 2 entries are flagged for manual review (HS code drift, brokerage cap)
 const CUSTOMS_PENDING_ENTRIES = new Set();
 function ensureCustomsFlags() {
-  if (CUSTOMS_PENDING_ENTRIES.size === 0 && D.customs?.entries?.length >= 2) {
-    CUSTOMS_PENDING_ENTRIES.add(D.customs.entries[0].entry);
-    CUSTOMS_PENDING_ENTRIES.add(D.customs.entries[1].entry);
-  }
+  // BUG-14: pin seed pending entries to specific IDs so unshifting uploads
+  // doesn't push the seed entries out of "Pending Review" classification.
+  if (D.customs?.entries?.some(e => e.entry === "LI-869248"))
+    CUSTOMS_PENDING_ENTRIES.add("LI-869248");
+  if (D.customs?.entries?.some(e => e.entry === "LI-807627"))
+    CUSTOMS_PENDING_ENTRIES.add("LI-807627");
 }
 
 function renderCustomsList(root) {
@@ -656,9 +752,13 @@ function renderCustomsList(root) {
   const complete = entries.filter(e => !CUSTOMS_PENDING_ENTRIES.has(e.entry) && !CUSTOMS_DISPUTED.has(e.entry));
   const tabRows = { pending, in_dispute: disputed, complete, all: entries }[CUSTOMS_FILTERS.tab];
 
+  // BUG-14: pin the demo findings to specific seed entry IDs instead of
+  // entries[0]/entries[1] so they don't migrate when uploads unshift new rows.
+  const SEED_HS_DRIFT = "LI-869248";
+  const SEED_BROKERAGE_CAP = "LI-807627";
   const finding = (e) => {
-    if (e.entry === entries[0]?.entry) return { tag: "HS code drift", note: "HS 7321.11 (cooking appliances) may apply — review broker classification." };
-    if (e.entry === entries[1]?.entry) return { tag: "Brokerage cap exceeded", note: "Brokerage $185 exceeds MSA cap of $125/entry." };
+    if (e.entry === SEED_HS_DRIFT) return { tag: "HS code drift", note: "HS 7321.11 (cooking appliances) may apply — review broker classification." };
+    if (e.entry === SEED_BROKERAGE_CAP) return { tag: "Brokerage cap exceeded", note: "Brokerage $185 exceeds MSA cap of $125/entry." };
     return null;
   };
 
@@ -813,29 +913,40 @@ function renderCustomsDetail(root) {
           </thead>
           <tbody>
             ${c.entries.map(e => {
-              const totalDutyRate = (e.sec301 !== "—" ? 25 : 0) + (e.sec232 !== "—" ? 50 : 0) + parseFloat(e.dutyRate);
+              // BUG-20: parseFloat("") is NaN — guard so the Math row never renders "NaN%".
+              const baseDutyRate = parseFloat(String(e.dutyRate || "").replace("%", ""));
+              const hasDutyRate = !isNaN(baseDutyRate);
+              const totalDutyRate = (hasDutyRate ? baseDutyRate : 0)
+                + (e.sec301 && e.sec301 !== "—" ? 25 : 0)
+                + (e.sec232 && e.sec232 !== "—" ? 50 : 0);
+              // BUG-18: make container cells clickable so users can drill into container detail.
+              const containerCell = e.container && e.container !== "—" && e.container !== ""
+                ? `<a class="mono" onclick="navigate('containers/${h(e.container)}')" style="cursor:pointer;text-decoration:underline;">${h(e.container)}</a>`
+                : `<span class="muted">—</span>`;
               return `
                 <tr>
                   <td class="mono"><b>${h(e.entry)}</b></td>
-                  <td class="mono">${h(e.container)}</td>
-                  <td class="mono">${h(e.po)}</td>
+                  <td>${containerCell}</td>
+                  <td class="mono">${h(e.po) || '<span class="muted">—</span>'}</td>
                   <td class="num mono">${fmt$0(e.value)}</td>
-                  <td class="mono">${h(e.hts)}</td>
-                  <td class="mono">${h(e.dutyRate)}</td>
-                  <td>${e.sec301 === "—" ? '<span class="muted">—</span>' : `<span class="pill warn">${h(e.sec301)} China</span>`}</td>
-                  <td>${e.sec232 === "—" ? '<span class="muted">—</span>' : `<span class="pill crit">${h(e.sec232)} steel</span>`}</td>
+                  <td class="mono">${h(e.hts) || '<span class="muted">—</span>'}</td>
+                  <td class="mono">${h(e.dutyRate) || '<span class="muted">—</span>'}</td>
+                  <td>${(!e.sec301 || e.sec301 === "—") ? '<span class="muted">—</span>' : `<span class="pill warn">${h(e.sec301)} China</span>`}</td>
+                  <td>${(!e.sec232 || e.sec232 === "—") ? '<span class="muted">—</span>' : `<span class="pill crit">${h(e.sec232)} steel</span>`}</td>
                   <td class="num mono"><b>${fmt$0(e.duty)}</b></td>
                   <td class="num mono">${fmt$(e.mpf)}</td>
                   <td class="num mono">${fmt$(e.hmf)}</td>
-                  <td class="num mono">${fmt$(e.brokerage + e.disbursement + e.isf)}</td>
+                  <td class="num mono">${fmt$((e.brokerage || 0) + (e.disbursement || 0) + (e.isf || 0))}</td>
                   <td class="num mono"><b>${fmt$(e.subtotal)}</b></td>
                   <td class="muted" style="max-width: 220px; font-size: 11.5px;">${h(e.notes)}</td>
                 </tr>
                 <tr style="background: #FBFCFE;">
                   <td colspan="14" class="muted" style="font-size: 11.5px; padding: 6px 14px;">
-                    <b>Math:</b> ${fmt$0(e.value)} × ${totalDutyRate.toFixed(1)}% = <span class="mono"><b>${fmt$0(e.duty)}</b></span> duty
-                    ${e.sec301 !== "—" ? ` · +25% Section 301 (China)` : ""}
-                    ${e.sec232 !== "—" ? ` · +50% Section 232 (steel)` : ""}
+                    ${hasDutyRate || (e.sec301 && e.sec301 !== "—") || (e.sec232 && e.sec232 !== "—")
+                      ? `<b>Math:</b> ${fmt$0(e.value)} × ${totalDutyRate.toFixed(1)}% = <span class="mono"><b>${fmt$0(e.duty)}</b></span> duty`
+                      : `<b>Math:</b> <span class="muted">Duty rate not extracted — see broker statement</span>`}
+                    ${e.sec301 && e.sec301 !== "—" ? ` · +25% Section 301 (China)` : ""}
+                    ${e.sec232 && e.sec232 !== "—" ? ` · +50% Section 232 (steel)` : ""}
                   </td>
                 </tr>
               `;

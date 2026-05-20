@@ -850,7 +850,10 @@ function lvRow(r, selectableLoadIds) {
 // LOAD DETAIL
 // ============================================================
 function renderLoadDetail(root, invoiceId) {
-  const inv = D.invoices.find(i => i["Invoice #"] === invoiceId);
+  // BUG-19: look up by Invoice # first, then by FB# / Load ID, so deep links
+  // from upload-created loads (which often use the FB# in the URL) resolve.
+  const inv = D.invoices.find(i => i["Invoice #"] === invoiceId)
+    || D.invoices.find(i => i["FB# / Load ID"] === invoiceId);
   if (!inv) {
     root.innerHTML = `<div class="empty"><strong>Load not found</strong>${h(invoiceId)}</div>`;
     return;

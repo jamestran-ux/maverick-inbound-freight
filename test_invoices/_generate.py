@@ -321,7 +321,9 @@ def _build_customs_excel(path, broker_invoice_no, invoice_date, period, terms, e
 
     ws3 = wb.create_sheet("Invoice_Lines")
     line_headers = ["#", "Invoice #", "Type", "Entry #", "Container",
-                    "PO", "Description", "Qty", "Rate", "Duty", "MPF", "HMF", "Amount"]
+                    "PO", "Description", "Qty", "Rate", "HTS", "Duty Rate",
+                    "Sec 301", "Sec 232", "Duty", "MPF", "HMF", "Brokerage",
+                    "Amount", "Notes"]
     for col_idx, h in enumerate(line_headers, 1):
         ws3.cell(row=4, column=col_idx, value=h)
     for idx, e in enumerate(entries, 5):
@@ -338,10 +340,16 @@ def _build_customs_excel(path, broker_invoice_no, invoice_date, period, terms, e
         ws3.cell(row=idx, column=7, value=f"{e['hts']} · {e.get('notes', '')}".strip(" ·"))
         ws3.cell(row=idx, column=8, value=1)
         ws3.cell(row=idx, column=9, value=e["value"])
-        ws3.cell(row=idx, column=10, value=e["duty"])
-        ws3.cell(row=idx, column=11, value=e["mpf"])
-        ws3.cell(row=idx, column=12, value=e["hmf"])
-        ws3.cell(row=idx, column=13, value=subtotal)
+        ws3.cell(row=idx, column=10, value=e["hts"])
+        ws3.cell(row=idx, column=11, value=e["duty_rate"])
+        ws3.cell(row=idx, column=12, value=e["sec301"])
+        ws3.cell(row=idx, column=13, value=e["sec232"])
+        ws3.cell(row=idx, column=14, value=e["duty"])
+        ws3.cell(row=idx, column=15, value=e["mpf"])
+        ws3.cell(row=idx, column=16, value=e["hmf"])
+        ws3.cell(row=idx, column=17, value=e["brokerage"])
+        ws3.cell(row=idx, column=18, value=subtotal)
+        ws3.cell(row=idx, column=19, value=e.get("notes", ""))
 
     wb.save(path)
     print(f"  wrote {os.path.basename(path)}  ({len(entries)} entries · grand total ${grand_total:,.2f})")

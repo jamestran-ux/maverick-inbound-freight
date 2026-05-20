@@ -220,9 +220,15 @@ def _extract_from_multisheet(wb) -> dict:
             "entry": _get("entry #", "entry"),
             "container": _get("container", "container #"),
             "po": _get("po", "po #"),
+            "hts": _get("hts", "hts code"),
+            "duty_rate": _get("duty rate"),
+            "sec301": _get("sec 301", "sec301"),
+            "sec232": _get("sec 232", "sec232"),
             "duty": float(_get("duty", default=0) or 0),
             "mpf": float(_get("mpf", default=0) or 0),
             "hmf": float(_get("hmf", default=0) or 0),
+            "brokerage": float(_get("brokerage", default=0) or 0),
+            "notes": _get("notes", default=""),
         })
     return {
         "invoice_no": str(inv_no),
@@ -259,11 +265,27 @@ def _extract_via_regex(pdf_path: str) -> dict:
                 break
         text = "\n".join(p.extract_text() or "" for p in pdf.pages)
 
+    # Heuristic: is this a customs broker invoice? If so, parse the entries
+    # table with customs-specific column mapping instead of drayage line items.
+    upper_text = text.upper()
+    is_customs_pdf = (
+        "LIVINGSTON" in upper_text
+        or "BROKER INVOICE" in upper_text
+        or "U.S. BROKER" in upper_text
+        or "ENTERED VALUE" in upper_text
+        or "HTS CODE" in upper_text
+        or "DUTY RATE" in upper_text
+        or "customs" in os.path.basename(pdf_path).lower()
+    )
+
     invoice_no = (
+        _re1(r"\b(LI-\d+(?:-[A-Z])?)\b", text) if is_customs_pdf else None
+    ) or (
         _re1(r"\b([A-Z]{3,4}-INV-\d+)\b", text)
         or _re1(r"\b(PCD-\d+-W\d+-\d+)\b", text)
+        or _re1(r"\b(LI-\d+)\b", text)
     )
-    carrier_name = _detect_carrier(text)
+    carrier_name = "Livingston International" if is_customs_pdf else _detect_carrier(text)
     invoice_date = _re1(r"Invoice Date[\s\n]*?(\d{4}-\d{2}-\d{2})", text)
     shipment_date = _re1(r"Shipment Date[\s\n]*?(\d{4}-\d{2}-\d{2})", text)
 
@@ -272,7 +294,38 @@ def _extract_via_regex(pdf_path: str) -> dict:
     fsc_amount = 0.0
     lines = []
 
-    if line_table:
+    if line_table and is_customs_pdf:
+        # Customs broker entries table — columns:
+        # #, Entry #, Container, PO, Entered Value, HTS Code, Duty Rate,
+        # Sec 301, Sec 232, Duty, MPF, HMF, Brokerage, Subtotal
+        for row in line_table[1:]:
+            row = [(c or "").replace("\n", " ").strip() for c in row]
+            if not row[0] or not row[1]:
+                continue
+            try:
+                lines.append({
+                    "line_type": "CUSTOMS_ENTRY",
+                    "entry": row[1],
+                    "container": row[2] if len(row) > 2 else "",
+                    "po": row[3] if len(row) > 3 else "",
+                    "value": _parse_money(row[4]) if len(row) > 4 else 0,
+                    "hts": row[5] if len(row) > 5 else "",
+                    "duty_rate": row[6] if len(row) > 6 else "",
+                    "sec301": row[7] if len(row) > 7 else "—",
+                    "sec232": row[8] if len(row) > 8 else "—",
+                    "duty": _parse_money(row[9]) if len(row) > 9 else 0,
+                    "mpf": _parse_money(row[10]) if len(row) > 10 else 0,
+                    "hmf": _parse_money(row[11]) if len(row) > 11 else 0,
+                    "brokerage": _parse_money(row[12]) if len(row) > 12 else 0,
+                    "amount": _parse_money(row[13]) if len(row) > 13 else 0,
+                    "subtotal": _parse_money(row[13]) if len(row) > 13 else 0,
+                    "description": (row[5] if len(row) > 5 else "") + " · " + (row[1] if len(row) > 1 else ""),
+                    "qty": 1.0,
+                    "rate": _parse_money(row[4]) if len(row) > 4 else 0,
+                })
+            except (IndexError, ValueError):
+                continue
+    elif line_table:
         for row in line_table[1:]:
             row = [(c or "").replace("\n", " ").strip() for c in row]
             if not row[0] or not row[1]:
