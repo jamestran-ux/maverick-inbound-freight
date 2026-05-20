@@ -8,26 +8,127 @@
 <div class="kpis">
   <div class="kpi"><div class="lbl">Loads today</div><div class="val">{{ kpis.loads_today }}</div></div>
   <div class="kpi crit"><div class="lbl">Units past LFD</div><div class="val">{{ kpis.units_past_lfd }}</div></div>
-  <div class="kpi high"><div class="lbl">Units dwelling &gt;2d at DC</div><div class="val">{{ kpis.units_dwelling_2d }}</div></div>
+  <div class="kpi high"><div class="lbl">Dwelling &gt;2d at DC</div><div class="val">{{ kpis.units_dwelling_2d }}</div></div>
   <div class="kpi"><div class="lbl">Active invoices</div><div class="val">{{ kpis.active_invoices }}</div></div>
   <div class="kpi"><div class="lbl">Open exceptions</div><div class="val">{{ kpis.open_exceptions }}</div></div>
-  <div class="kpi crit"><div class="lbl">$ at risk</div><div class="val">${{ "{:,.2f}".format(kpis.at_risk) }}</div></div>
+  <div class="kpi crit"><div class="lbl">$ at risk</div><div class="val">${{ "{:,.0f}".format(kpis.at_risk) }}</div></div>
 </div>
 
 <div class="ai-card">
-  <div><span class="badge">AI</span><strong>Exception summary</strong></div>
+  <div><span class="badge">AI</span><span class="label">Exception Summary</span></div>
   <pre>{{ ai_summary }}</pre>
 </div>
 
-<h3>Recommended actions</h3>
-{% for a in actions %}
-<div class="action-card">
-  <div class="left"><span class="pill {{ 'crit' if a.priority=='CRITICAL' else 'high' if a.priority=='HIGH' else 'med' if a.priority=='MEDIUM' else 'low' }}">{{ a.priority }}</span></div>
-  <div class="body">
-    <div class="title">{{ a.action_text }} — {{ a.container_no }}</div>
-    <div class="meta">{{ a.rationale_text }}</div>
+<div class="grid-2">
+  <div>
+    <h3>Recommended Actions</h3>
+    {% for a in actions %}
+    <div class="action-card">
+      <div class="left">
+        <span class="pill {{ 'crit' if a.priority=='CRITICAL' else 'high' if a.priority=='HIGH' else 'med' if a.priority=='MEDIUM' else 'low' }}">{{ a.priority }}</span>
+      </div>
+      <div class="body">
+        <div class="title">{{ a.action_text }}</div>
+        <div class="meta"><span class="mono">{{ a.container_no }}</span> · {{ a.rationale_text }}</div>
+      </div>
+      <div class="saved">${{ "{:,.0f}".format(a.dollars_saved or 0) }}</div>
+      <a class="btn btn-sm btn-primary" href="/containers/{{ a.container_no }}">Take action →</a>
+    </div>
+    {% endfor %}
   </div>
-  <div class="saved">${{ "{:,.0f}".format(a.dollars_saved or 0) }}</div>
+
+  <div>
+    <h3>Reminders &amp; Tasks</h3>
+    {% for r in reminders %}
+    <div class="action-card">
+      <div class="left"><span class="pill {{ 'high' if r.urgency=='Today' else 'med' }}">{{ r.urgency }}</span></div>
+      <div class="body">
+        <div class="title">{{ r.title }}</div>
+        <div class="meta">{{ r.detail }}</div>
+      </div>
+      <button class="btn btn-sm btn-primary" onclick="openReminder('{{ r.id }}')">Open</button>
+    </div>
+    {% endfor %}
+  </div>
 </div>
-{% endfor %}
+
+<div class="grid-2 mt-4">
+  <div class="card">
+    <h3 style="margin:0 0 10px;">Exceptions by Rule Family</h3>
+    <canvas id="chart-rules" height="180"></canvas>
+  </div>
+  <div class="card">
+    <h3 style="margin:0 0 10px;">Spend by Carrier (this week)</h3>
+    <canvas id="chart-spend" height="180"></canvas>
+  </div>
+</div>
+
+<!-- Reminder modal (reused for Pre-Arrival Forecast) -->
+<div id="reminder-modal" class="modal-backdrop" style="display:none;">
+  <div class="modal wide">
+    <div class="modal-header">
+      <h3 id="rm-title">Pre-Arrival Forecast</h3>
+      <button class="modal-close" onclick="closeReminderModal()">×</button>
+    </div>
+    <div class="modal-body" id="rm-body"><em>Loading…</em></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeReminderModal()">Cancel</button>
+      <button class="btn btn-primary" id="rm-gmail">Open in Gmail</button>
+      <button class="btn" id="rm-outlook">Open in Outlook</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// Charts
+const rules = {{ chart_rules|tojson }};
+new Chart(document.getElementById('chart-rules'), {
+  type: 'bar',
+  data: { labels: rules.labels, datasets: [{
+    data: rules.counts, backgroundColor: '#0C447C', borderRadius: 4
+  }] },
+  options: { plugins: {legend: {display: false}},
+    scales: {y: {beginAtZero: true, ticks: {stepSize: 1}}},
+    responsive: true, maintainAspectRatio: false
+  }
+});
+const spend = {{ chart_spend|tojson }};
+new Chart(document.getElementById('chart-spend'), {
+  type: 'doughnut',
+  data: { labels: spend.labels, datasets: [{
+    data: spend.values, backgroundColor: ['#0C447C','#1E5BA8','#85B7EB','#E6F1FB']
+  }] },
+  options: { plugins: {legend: {position: 'right'}},
+    responsive: true, maintainAspectRatio: false }
+});
+
+// Reminders
+async function openReminder(id) {
+  document.getElementById('reminder-modal').style.display = 'flex';
+  document.getElementById('rm-body').innerHTML = '<em>Generating email drafts…</em>';
+  const res = await fetch('/api/loads/prearrival-forecast');
+  const data = await res.json();
+  if (!data.emails || !data.emails.length) {
+    document.getElementById('rm-body').innerHTML = '<em>No upcoming containers to forecast.</em>';
+    return;
+  }
+  document.getElementById('rm-body').innerHTML = data.emails.map(e => `
+    <div class="email-block">
+      <div class="eh">To</div><div class="ev mono">${esc(e.to)}</div>
+      <div class="eh">Subject</div><div class="ev">${esc(e.subject)}</div>
+      <div class="eh">Body</div>
+      <pre>${esc(e.body)}</pre>
+    </div>`).join('');
+  const first = data.emails[0];
+  document.getElementById('rm-gmail').onclick = () => {
+    const enc = encodeURIComponent;
+    window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=${enc(first.to)}&su=${enc(first.subject)}&body=${enc(first.body)}`, '_blank');
+  };
+  document.getElementById('rm-outlook').onclick = () => {
+    window.location = `mailto:${encodeURIComponent(first.to)}?subject=${encodeURIComponent(first.subject)}&body=${encodeURIComponent(first.body)}`;
+  };
+}
+function closeReminderModal() { document.getElementById('reminder-modal').style.display = 'none'; }
+function esc(s) { return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+</script>
 {% endblock %}

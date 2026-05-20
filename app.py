@@ -53,6 +53,28 @@ def loads_page():
     return render_template("loads.html", loads=loads)
 
 
+@app.route("/loads/<fb_no>")
+def load_detail_page(fb_no):
+    conn = get_conn()
+    load = conn.execute("SELECT * FROM loads WHERE fb_no = ?", (fb_no,)).fetchone()
+    if not load:
+        conn.close()
+        abort(404)
+    load = dict(load)
+    container = None
+    if load["container_no"]:
+        c = conn.execute("SELECT * FROM containers WHERE number = ?", (load["container_no"],)).fetchone()
+        container = dict(c) if c else None
+    invoice = None
+    if load["invoice_no"]:
+        i = conn.execute("SELECT * FROM drayage_invoices WHERE invoice_no = ?", (load["invoice_no"],)).fetchone()
+        invoice = dict(i) if i else None
+    conn.close()
+    milestones = _build_milestones(container, load)
+    return render_template("load_detail.html", load=load, container=container,
+                           invoice=invoice, milestones=milestones)
+
+
 @app.route("/containers")
 def containers_page():
     conn = get_conn()
@@ -62,6 +84,61 @@ def containers_page():
     actions = recommend_container_actions()
     kpis = summary_kpis()
     return render_template("containers.html", containers=containers, actions=actions, kpis=kpis)
+
+
+@app.route("/containers/<container_no>")
+def container_detail_page(container_no):
+    conn = get_conn()
+    c = conn.execute("SELECT * FROM containers WHERE number = ?", (container_no,)).fetchone()
+    if not c:
+        conn.close()
+        abort(404)
+    container = dict(c)
+    pos = [dict(r) for r in conn.execute(
+        "SELECT * FROM purchase_orders WHERE container_no = ?", (container_no,)).fetchall()]
+    invoices = [dict(r) for r in conn.execute(
+        "SELECT * FROM drayage_invoices WHERE container_no = ?", (container_no,)).fetchall()]
+    conn.close()
+    milestones = _build_milestones(container, None)
+    # find matching recommendation action
+    action = next((a for a in recommend_container_actions() if a["container_no"] == container_no), None)
+    return render_template("container_detail.html", container=container,
+                           milestones=milestones, action=action, pos=pos, invoices=invoices)
+
+
+def _build_milestones(container, load):
+    """Build 7-milestone timeline. State = done | current | pending."""
+    if not container:
+        return []
+    stage = container.get("stage", "")
+    discharged = bool(container.get("discharge_date"))
+    customs_cleared = container.get("customs_status") == "Cleared"
+    ssl_released = container.get("ssl_released") == "Yes"
+    picked_up = bool(container.get("pickup_date"))
+    delivered = stage == "Delivered"
+    returned = container.get("container_status") == "Returned"
+
+    def st(done, current=False):
+        return "done" if done else ("current" if current else "pending")
+
+    return [
+        {"name": "Vessel Arrival", "ts": container.get("discharge_date") or "Pending",
+         "state": st(discharged, stage=="Awaiting Discharge")},
+        {"name": "Discharge", "ts": container.get("discharge_date") or "—",
+         "state": st(discharged, stage=="Awaiting Discharge")},
+        {"name": "Customs Cleared", "ts": "Yes" if customs_cleared else container.get("customs_status",""),
+         "state": st(customs_cleared, stage=="In Customs")},
+        {"name": "SSL Released", "ts": "Yes" if ssl_released else "Pending",
+         "state": st(ssl_released, stage=="Awaiting Release")},
+        {"name": "Out-Gate Ready", "ts": "Ready" if (customs_cleared and ssl_released) else "Pending",
+         "state": st(customs_cleared and ssl_released, stage=="Out-Gate Ready")},
+        {"name": "Pickup", "ts": container.get("pickup_date") or "Pending",
+         "state": st(picked_up)},
+        {"name": "Delivered", "ts": container.get("pickup_date") if delivered else "Pending",
+         "state": st(delivered)},
+        {"name": "Empty Returned", "ts": "Done" if returned else "Pending",
+         "state": st(returned)},
+    ]
 
 
 @app.route("/drayage-invoices")
@@ -249,6 +326,68 @@ def api_upload_drayage():
     })
 
 
+@app.route("/api/drayage-invoices/<invoice_no>/approve", methods=["POST"])
+def api_approve(invoice_no):
+    conn = get_conn()
+    conn.execute("UPDATE drayage_invoices SET status='Approved' WHERE invoice_no=?", (invoice_no,))
+    conn.execute("UPDATE audit_exceptions SET status='Closed' WHERE source_type='drayage_invoice' AND source_ref=?", (invoice_no,))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "Approved"})
+
+
+@app.route("/api/drayage-invoices/<invoice_no>/reject", methods=["POST"])
+def api_reject(invoice_no):
+    conn = get_conn()
+    conn.execute("UPDATE drayage_invoices SET status='In Dispute' WHERE invoice_no=?", (invoice_no,))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "In Dispute"})
+
+
+@app.route("/api/containers/<container_no>/action", methods=["POST"])
+def api_container_action(container_no):
+    """Generate email draft for dispatch / return / schedule."""
+    body = request.json or {}
+    kind = body.get("kind", "dispatch")
+    conn = get_conn()
+    c = conn.execute("SELECT * FROM containers WHERE number = ?", (container_no,)).fetchone()
+    conn.close()
+    if not c:
+        return jsonify({"error": "Container not found"}), 404
+    c = dict(c)
+    if kind == "return":
+        email = draft_email("dispatch_instruction", {
+            "carrier_name": "Pacific Coastline Drayage",
+            "container_no": container_no,
+            "fb_no": "(empty return)",
+            "pickup_window": "today",
+            "reason": f"Empty return — container has dwelled {c.get('days_at_location','?')} days at the DC, detention accruing",
+            "terminal": "NewAge DC → SSL empty depot",
+        })
+        email["subject"] = f"Empty Return Request — Container {container_no}"
+    elif kind == "schedule":
+        email = draft_email("dispatch_instruction", {
+            "carrier_name": "Pacific Coastline Drayage",
+            "container_no": container_no,
+            "fb_no": "(scheduling)",
+            "pickup_window": "next available terminal slot inside free time",
+            "reason": "Pre-emptive scheduling to lock in capacity before LFD",
+            "terminal": c.get("us_port", "the terminal"),
+        })
+        email["subject"] = f"Schedule Pickup — Container {container_no}"
+    else:
+        email = draft_email("dispatch_instruction", {
+            "carrier_name": "Pacific Coastline Drayage",
+            "container_no": container_no,
+            "fb_no": "(direct dispatch)",
+            "pickup_window": "within 24 hours",
+            "reason": "Container Ready to Outgate; dispatch to avoid demurrage",
+            "terminal": c.get("us_port", "the terminal"),
+        })
+    return jsonify({"email": email, "kind": kind})
+
+
 @app.route("/api/drayage-invoices/<invoice_no>/dispute", methods=["POST"])
 def api_dispute(invoice_no):
     conn = get_conn()
@@ -364,6 +503,19 @@ def api_prearrival():
     return jsonify({"emails": emails, "carriers": list(by_carrier.keys())})
 
 
+@app.route("/api/scorecard/<carrier_name>")
+def api_scorecard_history(carrier_name):
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute(
+        """SELECT di.invoice_no, ae.rule_family, ae.severity, ae.dollars_at_risk
+           FROM audit_exceptions ae
+           JOIN drayage_invoices di ON di.invoice_no = ae.source_ref
+           WHERE di.carrier_name = ?
+           ORDER BY ae.dollars_at_risk DESC LIMIT 20""", (carrier_name,)).fetchall()]
+    conn.close()
+    return jsonify(rows)
+
+
 @app.route("/api/p4-transfer-needs")
 def api_p4_needs():
     conn = get_conn()
@@ -407,6 +559,37 @@ def _dashboard_context():
     conn.close()
     actions = recommend_container_actions()[:3]
     ai_summary = summarize_exceptions(exceptions)
+
+    # Chart data — exceptions by rule
+    rule_counts = {}
+    for e in exceptions:
+        rule_counts[e["rule_family"]] = rule_counts.get(e["rule_family"], 0) + 1
+    sorted_rules = sorted(rule_counts.items(), key=lambda x: -x[1])
+    chart_rules = {"labels": [r[0] for r in sorted_rules],
+                   "counts": [r[1] for r in sorted_rules]}
+
+    # Chart data — spend by carrier
+    conn = get_conn()
+    spend = conn.execute(
+        """SELECT carrier_name, SUM(grand_total) AS total
+           FROM drayage_invoices GROUP BY carrier_name ORDER BY total DESC""").fetchall()
+    conn.close()
+    chart_spend = {"labels": [r["carrier_name"] or "(unknown)" for r in spend],
+                   "values": [round(r["total"] or 0, 2) for r in spend]}
+
+    # Reminders — Stage 2 pre-arrival reminders
+    reminders = [
+        {"id": "pa1", "urgency": "Today",
+         "title": "Send Refined Pre-Arrival List to PCD",
+         "detail": "Vessel ONE OLYMPUS docks Friday 2026-05-21 (2 days out). 6 containers expected at LB Pier T."},
+        {"id": "pa2", "urgency": "Tomorrow",
+         "title": "Send Refined Pre-Arrival List to CDS",
+         "detail": "Vessel MSC INGRID docks Saturday 2026-05-23. 3 containers expected at Tacoma."},
+        {"id": "pa3", "urgency": "Today",
+         "title": "Review Ready-to-Outgate queue",
+         "detail": "2 containers Out-Gate Ready this week. Confirm dispatch schedule with PCD."},
+    ]
+
     return {
         "kpis": {
             "loads_today": loads_today,
@@ -418,6 +601,9 @@ def _dashboard_context():
         },
         "ai_summary": ai_summary,
         "actions": actions,
+        "reminders": reminders,
+        "chart_rules": chart_rules,
+        "chart_spend": chart_spend,
     }
 
 

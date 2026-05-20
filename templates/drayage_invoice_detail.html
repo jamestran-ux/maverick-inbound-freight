@@ -2,50 +2,48 @@
 {% set active = "drayage" %}
 {% block title %}{{ inv.invoice_no }}{% endblock %}
 {% block content %}
+<p><a href="/drayage-invoices" class="text-sm">← Back to invoices</a></p>
 <h2>{{ inv.invoice_no }}</h2>
 <p class="sub">{{ inv.carrier_name }} · {{ inv.invoice_date }}</p>
 
 <div class="card">
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;font-size:13px;">
-    <div><div style="color:#64748B;font-size:11px;text-transform:uppercase;">FB# / Load ID</div>
-      <div class="mono">{{ inv.fb_no }}</div></div>
-    <div><div style="color:#64748B;font-size:11px;text-transform:uppercase;">Container</div>
-      <div class="mono">{{ inv.container_no }}</div></div>
-    <div><div style="color:#64748B;font-size:11px;text-transform:uppercase;">BOL/MBL</div>
-      <div class="mono">{{ inv.bol or "—" }}</div></div>
-    <div><div style="color:#64748B;font-size:11px;text-transform:uppercase;">Lane</div>
-      <div>{{ inv.origin }} → {{ inv.destination }}</div></div>
-    <div><div style="color:#64748B;font-size:11px;text-transform:uppercase;">Linehaul</div>
-      <div>${{ "{:,.2f}".format(inv.base_rate or 0) }}</div></div>
-    <div><div style="color:#64748B;font-size:11px;text-transform:uppercase;">FSC</div>
-      <div>${{ "{:,.2f}".format(inv.fsc_amount or 0) }} ({{ "{:.0%}".format(inv.fsc_pct or 0) }})</div></div>
-    <div><div style="color:#64748B;font-size:11px;text-transform:uppercase;">Grand Total</div>
-      <div style="font-weight:700;">${{ "{:,.2f}".format(inv.grand_total or 0) }}</div></div>
-    <div><div style="color:#64748B;font-size:11px;text-transform:uppercase;">Status</div>
-      <div><span class="pill {{ 'pending' if inv.status=='Pending Review' else 'dispute' if inv.status=='In Dispute' else 'complete' if inv.status=='Complete' else 'med' }}">{{ inv.status }}</span></div></div>
+  <div class="grid-4">
+    <div><div class="text-xs text-muted">FB# / Load ID</div><div class="mono">{{ inv.fb_no }}</div></div>
+    <div><div class="text-xs text-muted">Container</div><div class="mono">{{ inv.container_no }}</div></div>
+    <div><div class="text-xs text-muted">BOL/MBL</div><div class="mono">{{ inv.bol or "—" }}</div></div>
+    <div><div class="text-xs text-muted">Lane</div><div>{{ inv.origin }} → {{ inv.destination }}</div></div>
+    <div><div class="text-xs text-muted">Linehaul</div><div>${{ "{:,.2f}".format(inv.base_rate or 0) }}</div></div>
+    <div><div class="text-xs text-muted">FSC</div><div>${{ "{:,.2f}".format(inv.fsc_amount or 0) }} ({{ "{:.0%}".format(inv.fsc_pct or 0) }})</div></div>
+    <div><div class="text-xs text-muted">Grand Total</div><div style="font-weight:700;font-size:16px;">${{ "{:,.2f}".format(inv.grand_total or 0) }}</div></div>
+    <div><div class="text-xs text-muted">Status</div><div><span class="pill {{ 'pending' if inv.status=='Pending Review' else 'dispute' if inv.status=='In Dispute' else 'complete' if inv.status=='Complete' else 'low' if inv.status=='Approved' else 'gray' }}">{{ inv.status }}</span></div></div>
   </div>
+
+  {% if inv.status == 'Pending Review' or inv.status == 'In Dispute' %}
+  <div class="flex gap-2 mt-4">
+    <button class="btn btn-success" onclick="approveInv()">✓ Approve for Payment</button>
+    <button class="btn btn-danger" onclick="rejectInv()">✗ Reject &amp; Dispute</button>
+    {% if exceptions %}
+    <button class="btn btn-primary" onclick="openDispute()">📧 Draft Dispute Email</button>
+    {% endif %}
+  </div>
+  {% endif %}
 </div>
 
 {% if exceptions %}
 <h3>Audit Exceptions ({{ exceptions|length }})</h3>
 {% for e in exceptions %}
 <div class="card" style="border-left:4px solid {{ '#791F1F' if e.severity=='CRITICAL' else '#633806' if e.severity=='HIGH' else '#3C3489' if e.severity=='MEDIUM' else '#085041' }};">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+  <div class="flex items-center" style="justify-content:space-between;">
     <div>
       <span class="pill {{ 'crit' if e.severity=='CRITICAL' else 'high' if e.severity=='HIGH' else 'med' if e.severity=='MEDIUM' else 'low' }}">{{ e.severity }}</span>
       <strong style="margin-left:8px;">{{ e.rule_family }}</strong>
     </div>
     <div style="font-weight:700;font-size:16px;">${{ "{:,.2f}".format(e.dollars_at_risk or 0) }}</div>
   </div>
-  <div style="margin-top:8px;font-size:13px;">{{ e.description }}</div>
-  <div style="margin-top:6px;font-size:12px;color:#0C447C;">→ {{ e.recommended_action }}</div>
+  <div class="text-sm mt-2">{{ e.description }}</div>
+  <div class="text-sm mt-2" style="color:var(--blue);">→ {{ e.recommended_action }}</div>
 </div>
 {% endfor %}
-<form method="post" action="/api/drayage-invoices/{{ inv.invoice_no }}/dispute" style="margin-top:12px;"
-      onsubmit="event.preventDefault(); fetch(this.action,{method:'POST'}).then(r=>r.json()).then(d=>{ document.getElementById('dispute-output').textContent = 'TO: '+d.email.to+'\nSUBJECT: '+d.email.subject+'\n\n'+d.email.body; });">
-  <button style="background:#0C447C;color:#fff;border:0;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;">Draft dispute email</button>
-</form>
-<pre id="dispute-output" style="background:#F6F8FB;padding:12px;margin-top:12px;font-size:12px;font-family:inherit;white-space:pre-wrap;border-radius:6px;"></pre>
 {% endif %}
 
 <h3>Line items ({{ lines|length }})</h3>
@@ -75,5 +73,53 @@
   </tbody>
 </table>
 
-<p style="margin-top:16px;"><a href="/drayage-invoices">← Back to list</a></p>
+<!-- Dispute drawer -->
+<div id="dispute-drawer-bg" class="drawer-backdrop"></div>
+<div id="dispute-drawer" class="drawer">
+  <div class="modal-header">
+    <h3>Draft Dispute Email</h3>
+    <button class="modal-close" onclick="closeDispute()">×</button>
+  </div>
+  <div class="modal-body" id="dispute-body"><em>Drafting…</em></div>
+  <div class="modal-footer">
+    <button class="btn" onclick="closeDispute()">Cancel</button>
+    <button class="btn btn-primary" id="dispute-gmail">Open in Gmail</button>
+  </div>
+</div>
+
+<script>
+async function approveInv() {
+  if (!confirm('Approve {{ inv.invoice_no }} for payment?')) return;
+  const r = await fetch('/api/drayage-invoices/{{ inv.invoice_no }}/approve', {method:'POST'});
+  if (r.ok) location.reload();
+}
+async function rejectInv() {
+  if (!confirm('Reject and route to dispute workflow?')) return;
+  const r = await fetch('/api/drayage-invoices/{{ inv.invoice_no }}/reject', {method:'POST'});
+  if (r.ok) location.reload();
+}
+async function openDispute() {
+  document.getElementById('dispute-drawer-bg').classList.add('open');
+  document.getElementById('dispute-drawer').classList.add('open');
+  const r = await fetch('/api/drayage-invoices/{{ inv.invoice_no }}/dispute', {method:'POST'});
+  const data = await r.json();
+  const e = data.email;
+  document.getElementById('dispute-body').innerHTML = `
+    <div class="email-block">
+      <div class="eh">To</div><div class="ev mono">${esc(e.to)}</div>
+      <div class="eh">Subject</div><div class="ev">${esc(e.subject)}</div>
+      <div class="eh">Body</div><pre>${esc(e.body)}</pre>
+    </div>`;
+  document.getElementById('dispute-gmail').onclick = () => {
+    const enc = encodeURIComponent;
+    window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=${enc(e.to)}&su=${enc(e.subject)}&body=${enc(e.body)}`, '_blank');
+  };
+}
+function closeDispute() {
+  document.getElementById('dispute-drawer-bg').classList.remove('open');
+  document.getElementById('dispute-drawer').classList.remove('open');
+}
+document.getElementById('dispute-drawer-bg').addEventListener('click', closeDispute);
+function esc(s) { return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+</script>
 {% endblock %}

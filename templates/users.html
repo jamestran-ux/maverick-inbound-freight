@@ -2,21 +2,83 @@
 {% set active = "users" %}
 {% block title %}Users{% endblock %}
 {% block content %}
-<h2>Users & Access</h2>
+<h2>Users &amp; Access</h2>
 <p class="sub">7 seeded users. RBAC roles map to which sections are visible.</p>
 
+<div class="flex gap-2 items-center mb-3">
+  <button class="btn btn-primary" onclick="openAdd()">+ Add User</button>
+</div>
+
 <table class="card">
-  <thead><tr><th>First</th><th>Last</th><th>Email</th><th>Role</th><th>Last Login</th></tr></thead>
+  <thead><tr><th>First</th><th>Last</th><th>Email</th><th>Role</th><th>Last Login</th><th>Actions</th></tr></thead>
   <tbody>
   {% for u in users %}
   <tr>
     <td>{{ u.first_name }}</td>
     <td>{{ u.last_name }}</td>
     <td class="mono">{{ u.email }}</td>
-    <td>{{ u.role }}</td>
-    <td>{{ u.last_login }}</td>
+    <td><span class="pill blue">{{ u.role }}</span></td>
+    <td class="text-xs">{{ u.last_login }}</td>
+    <td><button class="btn btn-sm" onclick="alert('Edit user: {{ u.email }} (mock)')">Edit</button></td>
   </tr>
   {% endfor %}
   </tbody>
 </table>
+
+<h3>Role Permissions Matrix</h3>
+<table class="card">
+  <thead><tr>
+    <th>Section</th><th class="center">Admin</th><th class="center">Logistics Analyst</th><th class="center">AP / Finance</th><th class="center">DC Ops</th><th class="center">Read-only</th>
+  </tr></thead>
+  <tbody>
+  {% for section in ['Dashboard','Loads','Transfers','Containers','Drayage Invoices','Customs Invoices','GL Reconciliation','Rate Card & RFQ','Scorecard','Users'] %}
+  <tr>
+    <td>{{ section }}</td>
+    <td class="center">✓</td>
+    <td class="center">{{ '✓' if section != 'Users' else '—' }}</td>
+    <td class="center">{{ '✓' if section in ['Dashboard','Drayage Invoices','Customs Invoices','GL Reconciliation'] else '—' }}</td>
+    <td class="center">{{ '✓' if section in ['Dashboard','Loads','Transfers','Containers'] else '—' }}</td>
+    <td class="center">{{ '👁' if section != 'Users' else '—' }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<div id="add-modal" class="modal-backdrop" style="display:none;">
+  <div class="modal">
+    <div class="modal-header"><h3>+ Add User</h3><button class="modal-close" onclick="closeAdd()">×</button></div>
+    <div class="modal-body">
+      <div class="grid-2">
+        <div><label>First Name</label><input id="u-first" placeholder="Jane"></div>
+        <div><label>Last Name</label><input id="u-last" placeholder="Smith"></div>
+      </div>
+      <label class="mt-3">Email</label><input id="u-email" placeholder="jane.smith@newageproducts.com" style="width:100%;">
+      <label class="mt-3">Role</label>
+      <select id="u-role" style="width:100%;">
+        <option>Admin</option><option>Logistics Analyst</option>
+        <option>AP / Finance</option><option>DC Operations</option><option>Read-only</option>
+      </select>
+      <label class="mt-3">DC Assigned</label>
+      <select id="u-dc" style="width:100%;">
+        <option>All DCs</option><option>Perris CA</option><option>Monee IL</option>
+      </select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeAdd()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveUser()">Create User</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function openAdd() { document.getElementById('add-modal').style.display = 'flex'; }
+function closeAdd() { document.getElementById('add-modal').style.display = 'none'; }
+function saveUser() {
+  const first = document.getElementById('u-first').value.trim();
+  const email = document.getElementById('u-email').value.trim();
+  if (!first || !email) return alert('First name and email required.');
+  alert(`✓ User created: ${first} (${email})\n\nIn production: writes to users table, triggers SSO invitation email.`);
+  closeAdd();
+}
+</script>
 {% endblock %}

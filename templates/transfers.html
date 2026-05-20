@@ -3,43 +3,38 @@
 {% block title %}Transfer Requests{% endblock %}
 {% block content %}
 <h2>Transfer Requests</h2>
-<p class="sub">Container-level transfers. Inventory needs come from P4; Maverick handles the logistics layer.</p>
+<p class="sub">Container-level transfers. Inventory needs come from P4 Warehouse; Maverick handles the logistics layer.</p>
 
-<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
+<div class="flex gap-2 items-center mb-3">
   <button class="btn btn-primary" onclick="openNewTransfer()">+ New Transfer</button>
-  <span style="flex:1;"></span>
-  <span style="color:#64748B;font-size:12px;">{{ transfers|length }} active · {{ p4_needs|length }} P4 needs pending</span>
+  <span class="flex-1"></span>
+  <span class="text-sm text-muted">{{ transfers|length }} active · {{ p4_needs|length }} P4 needs pending</span>
 </div>
 
-<h3>Active Transfers</h3>
-<table class="card">
-  <thead><tr>
-    <th>Transfer ID</th><th>Mode</th>
-    <th>From</th><th>To</th><th>SKU</th>
-    <th>Equipment Ref</th><th class="right">Est. Cost</th>
-    <th>Status</th><th>Costco PO</th>
-  </tr></thead>
-  <tbody>
-  {% for t in transfers %}
-  <tr>
-    <td class="mono">{{ t.transfer_id }}</td>
-    <td>{{ t.mode }}</td>
-    <td>{{ t.from_dc }}</td>
-    <td>{{ t.to_dc }}</td>
-    <td>{{ t.sku_family }}</td>
-    <td class="mono">{{ t.equipment_ref or "—" }}</td>
-    <td class="right">${{ "{:,.0f}".format(t.est_cost or 0) }}</td>
-    <td><span class="pill {{ 'low' if t.status in ('COMPLETED','APPROVED') else 'pending' }}">{{ t.status }}</span></td>
-    <td>{{ t.costco_po_ref or "—" }}</td>
-  </tr>
+<h3>Kanban</h3>
+<div class="kanban">
+  {% for col in ['SUBMITTED','APPROVED','DISPATCHED','IN-TRANSIT','COMPLETED'] %}
+  <div class="kanban-col">
+    <h4>{{ col }} <span>{{ (transfers|selectattr('status','equalto',col)|list|length) + (transfers|selectattr('status','equalto',col.title())|list|length) }}</span></h4>
+    {% for t in transfers if (t.status or '')|upper == col %}
+    <div class="kanban-card" onclick="alert('Transfer {{ t.transfer_id }} — {{ t.mode }}')">
+      <div class="id">{{ t.transfer_id }}</div>
+      <div class="lane">{{ t.from_dc }} → {{ t.to_dc }}</div>
+      <div class="text-xs text-muted mt-2">{{ t.mode }}</div>
+      <div class="text-xs mt-2">${{ "{:,.0f}".format(t.est_cost or 0) }}</div>
+      {% if t.costco_po_ref and 'Yes' in (t.costco_po_ref or '') %}
+      <div class="text-xs mt-2"><span class="pill high">Costco</span></div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
   {% endfor %}
-  </tbody>
-</table>
+</div>
 
 <h3>P4 Transfer Needs (pending fulfillment)</h3>
 <table class="card">
   <thead><tr>
-    <th>P4 Request ID</th><th>From</th><th>To</th>
+    <th>P4 Request</th><th>From</th><th>To</th>
     <th>SKU</th><th class="right">Units</th><th>Need-By</th>
     <th>Costco PO</th><th>Reason</th>
   </tr></thead>
@@ -53,86 +48,70 @@
     <td class="right">{{ "{:,}".format(n.units or 0) }}</td>
     <td>{{ n.need_by }}</td>
     <td>{% if n.costco_po_ref %}<span class="pill high">{{ n.costco_po_ref }}</span>{% else %}—{% endif %}</td>
-    <td>{{ n.reason }}</td>
+    <td class="text-xs">{{ n.reason }}</td>
   </tr>
   {% endfor %}
   </tbody>
 </table>
 
-<!-- New Transfer Modal -->
+<!-- New Transfer Modal: 3 steps -->
 <div id="tr-modal" class="modal-backdrop" style="display:none;">
-  <div class="modal" style="max-width:820px;">
-    <div class="modal-header">
-      <h3 id="tr-step-title">Step 1 of 3 — Select P4 Transfer Request(s)</h3>
-      <button class="modal-close" onclick="closeTransferModal()">×</button>
-    </div>
+  <div class="modal wide">
+    <div class="modal-header"><h3 id="tr-title">New Transfer — Step 1</h3><button class="modal-close" onclick="closeTransferModal()">×</button></div>
     <div class="modal-body">
 
-      <!-- Step 1: P4 picker -->
       <div id="tr-step-1">
-        <p class="sub" style="margin-bottom:12px;">Pick one or more P4 transfer needs to fulfill in this transfer. Inventory and SKU come read-only from P4 Warehouse.</p>
-        <table style="width:100%;font-size:13px;">
-          <thead><tr style="background:#F6F8FB;">
-            <th style="padding:8px;text-align:left;">✓</th>
-            <th style="padding:8px;text-align:left;">P4 Request</th>
-            <th style="padding:8px;text-align:left;">Lane</th>
-            <th style="padding:8px;text-align:left;">SKU</th>
-            <th style="padding:8px;text-align:right;">Units</th>
-            <th style="padding:8px;text-align:left;">Need-By</th>
-            <th style="padding:8px;text-align:left;">Costco</th>
+        <p class="sub">Pick one or more P4 transfer needs. Inventory and SKU come read-only from P4.</p>
+        <table>
+          <thead><tr>
+            <th>✓</th><th>P4 Request</th><th>Lane</th><th>SKU</th><th class="right">Units</th><th>Need-By</th><th>Costco</th>
           </tr></thead>
           <tbody>
           {% for n in p4_needs %}
-          <tr style="border-bottom:0.5px solid var(--border);">
-            <td style="padding:8px;"><input type="checkbox" class="p4-check" data-req="{{ n.p4_request_id }}" data-from="{{ n.from_dc }}" data-to="{{ n.to_dc }}" data-sku="{{ n.sku_family }}" data-units="{{ n.units }}" data-costco="{{ n.costco_po_ref or '' }}" data-reason="{{ n.reason }}"></td>
-            <td style="padding:8px;"><span class="mono">{{ n.p4_request_id }}</span></td>
-            <td style="padding:8px;">{{ n.from_dc }} → {{ n.to_dc }}</td>
-            <td style="padding:8px;">{{ n.sku_family }}</td>
-            <td style="padding:8px;text-align:right;">{{ "{:,}".format(n.units or 0) }}</td>
-            <td style="padding:8px;">{{ n.need_by }}</td>
-            <td style="padding:8px;">{% if n.costco_po_ref %}<span class="pill high">{{ n.costco_po_ref }}</span>{% else %}—{% endif %}</td>
+          <tr>
+            <td><input type="checkbox" class="p4-check" data-req="{{ n.p4_request_id }}" data-from="{{ n.from_dc }}" data-to="{{ n.to_dc }}" data-sku="{{ n.sku_family }}" data-units="{{ n.units }}" data-costco="{{ n.costco_po_ref or '' }}" data-reason="{{ n.reason }}"></td>
+            <td class="mono">{{ n.p4_request_id }}</td>
+            <td>{{ n.from_dc }} → {{ n.to_dc }}</td>
+            <td>{{ n.sku_family }}</td>
+            <td class="right">{{ "{:,}".format(n.units or 0) }}</td>
+            <td>{{ n.need_by }}</td>
+            <td>{% if n.costco_po_ref %}<span class="pill high">Costco</span>{% else %}—{% endif %}</td>
           </tr>
           {% endfor %}
           </tbody>
         </table>
       </div>
 
-      <!-- Step 2: Logistics -->
       <div id="tr-step-2" style="display:none;">
-        <div style="background:#F6F8FB;padding:12px;border-radius:8px;margin-bottom:14px;font-size:12px;color:#475569;">
-          <strong>From P4 (read-only):</strong>
-          <div id="tr-source-summary" style="margin-top:6px;color:#0F172A;font-size:13px;"></div>
+        <div class="card" style="background:var(--bg-alt);margin-bottom:14px;">
+          <div class="text-xs text-muted">From P4 (read-only)</div>
+          <div id="tr-source-summary" class="text-sm mt-2"></div>
         </div>
-        <label style="display:block;font-size:12px;color:#475569;margin-top:8px;">Mode</label>
-        <select id="tr-mode" style="width:100%;padding:8px 10px;border:0.5px solid var(--border);border-radius:6px;margin-top:4px;font-size:13px;">
+        <label>Mode</label>
+        <select id="tr-mode" style="width:100%;">
           <option value="a">DC-to-DC, 53' Intermodal Rail</option>
           <option value="b">DC-to-DC, 53' TL Dry Van</option>
           <option value="c">Port-Direct Cross-Dock (40' Ocean Container)</option>
         </select>
-        <label style="display:block;font-size:12px;color:#475569;margin-top:14px;">
-          <span id="tr-equip-label">Domestic Equipment Reference (optional)</span>
-        </label>
-        <input id="tr-equip" placeholder="e.g., EMHU2241095 (J.B. Hunt EMP)" style="width:100%;padding:8px 10px;border:0.5px solid var(--border);border-radius:6px;margin-top:4px;font-size:13px;">
-
-        <label style="display:block;font-size:12px;color:#475569;margin-top:14px;">Carrier Selection (top 5 by composite ranking)</label>
-        <div id="tr-carriers" style="margin-top:6px;font-size:12px;color:#64748B;">Click "Find Carriers" to rank.</div>
-        <button class="btn" style="margin-top:8px;" onclick="findCarriers()">Find Carriers</button>
-
-        <label style="display:block;font-size:12px;color:#475569;margin-top:14px;">Pickup Window</label>
-        <input id="tr-pickup" type="date" style="padding:8px 10px;border:0.5px solid var(--border);border-radius:6px;margin-top:4px;font-size:13px;">
-
-        <label style="display:block;font-size:12px;color:#475569;margin-top:14px;">Reason Code</label>
-        <select id="tr-reason" style="width:100%;padding:8px 10px;border:0.5px solid var(--border);border-radius:6px;margin-top:4px;font-size:13px;">
-          <option>Rebalance</option><option>Stockout</option>
-          <option>Recall</option><option>EOL Liquidation</option>
-        </select>
+        <label class="mt-3" id="tr-equip-label">Domestic Equipment Reference (optional)</label>
+        <input id="tr-equip" placeholder="e.g., EMHU2241095" style="width:100%;">
+        <label class="mt-3">Carrier ranking (composite + criticality)</label>
+        <div id="tr-carriers" class="text-sm text-muted">Click "Find Carriers" to rank.</div>
+        <button class="btn mt-2" onclick="findCarriers()">Find Carriers</button>
+        <div class="grid-2 mt-3">
+          <div><label>Pickup window</label><input id="tr-pickup" type="date" style="width:100%;"></div>
+          <div><label>Reason code</label>
+            <select id="tr-reason" style="width:100%;">
+              <option>Rebalance</option><option>Stockout</option>
+              <option>Recall</option><option>EOL Liquidation</option>
+            </select></div>
+        </div>
       </div>
 
-      <!-- Step 3: Costco compliance check (conditional) -->
       <div id="tr-step-3" style="display:none;">
-        <div id="tr-costco-banner" style="background:#FAEEDA;border-left:4px solid #633806;padding:14px 16px;border-radius:8px;margin-bottom:14px;display:none;">
-          <strong style="color:#633806;">⚠️ Costco DC destination — verify before submit</strong>
-          <ul style="margin:8px 0 0;padding-left:20px;font-size:13px;color:#0F172A;">
+        <div id="tr-costco-banner" class="card" style="background:var(--high-bg);border-left:4px solid var(--high-fg);display:none;">
+          <strong style="color:var(--high-fg);">⚠️ Costco DC destination — verify before submit</strong>
+          <ul class="text-sm mt-2" style="padding-left:18px;">
             <li>☑️ 850 PO matched: <span id="tr-costco-po" class="mono"></span></li>
             <li>☐ 856 ASN to be generated post-dispatch</li>
             <li>☐ CHEP four-way pallets</li>
@@ -140,93 +119,63 @@
             <li>☐ SSCC-18 / GS1-128 labels</li>
           </ul>
         </div>
-        <div id="tr-non-costco-msg" style="background:#E1F5EE;padding:14px 16px;border-radius:8px;display:none;">
+        <div id="tr-non-costco-msg" class="card" style="background:var(--low-bg);display:none;">
           ✓ Internal transfer — no customer compliance checks required.
         </div>
-        <h4 style="margin:16px 0 8px;">Review & Submit</h4>
-        <div id="tr-review" style="background:#F6F8FB;padding:12px;border-radius:8px;font-size:12px;line-height:1.6;"></div>
+        <h4 class="mt-3">Review &amp; Submit</h4>
+        <div id="tr-review" class="card" style="background:var(--bg-alt);"></div>
       </div>
     </div>
     <div class="modal-footer">
       <button class="btn" onclick="closeTransferModal()">Cancel</button>
-      <button class="btn" onclick="goPrevStep()" id="tr-prev" style="display:none;">← Back</button>
-      <button class="btn btn-primary" onclick="goNextStep()" id="tr-next">Next →</button>
-      <button class="btn btn-primary" onclick="submitTransfer()" id="tr-submit" style="display:none;">Submit Transfer</button>
+      <button class="btn" id="tr-prev" onclick="goPrev()" style="display:none;">← Back</button>
+      <button class="btn btn-primary" id="tr-next" onclick="goNext()">Next →</button>
+      <button class="btn btn-primary" id="tr-submit" onclick="submitTransfer()" style="display:none;">Submit Transfer</button>
     </div>
   </div>
 </div>
 
-<style>
-.btn { padding:8px 14px; border:0.5px solid var(--border); border-radius:6px;
-       background:#fff; cursor:pointer; font-size:13px; }
-.btn:hover { background:#F6F8FB; }
-.btn-primary { background:#0C447C; color:#fff; border-color:#0C447C; }
-.btn-primary:hover { background:#0A3866; }
-.modal-backdrop { position:fixed; inset:0; background:rgba(15,23,42,0.5); z-index:1000;
-                  display:flex; align-items:center; justify-content:center; padding:24px; }
-.modal { background:#fff; border-radius:12px; max-width:760px; width:100%; max-height:90vh;
-         display:flex; flex-direction:column; overflow:hidden; }
-.modal-header { display:flex; justify-content:space-between; align-items:center;
-                padding:14px 20px; border-bottom:0.5px solid var(--border); }
-.modal-header h3 { margin:0; font-size:16px; }
-.modal-close { border:0; background:transparent; font-size:22px; cursor:pointer; color:#64748B; }
-.modal-body { padding:16px 20px; overflow-y:auto; flex:1; }
-.modal-footer { display:flex; gap:8px; justify-content:flex-end; padding:12px 20px;
-                border-top:0.5px solid var(--border); background:#F6F8FB; }
-</style>
-
 <script>
-let currentStep = 1;
-let selectedP4 = null;
-
+let currentStep = 1; let selectedP4 = null;
 function openNewTransfer() {
   currentStep = 1;
   document.querySelectorAll('.p4-check').forEach(c => c.checked = false);
   document.getElementById('tr-modal').style.display = 'flex';
   showStep(1);
 }
-
-function closeTransferModal() {
-  document.getElementById('tr-modal').style.display = 'none';
-}
-
+function closeTransferModal() { document.getElementById('tr-modal').style.display = 'none'; }
 function showStep(n) {
   currentStep = n;
-  document.getElementById('tr-step-1').style.display = n===1 ? 'block' : 'none';
-  document.getElementById('tr-step-2').style.display = n===2 ? 'block' : 'none';
-  document.getElementById('tr-step-3').style.display = n===3 ? 'block' : 'none';
-  document.getElementById('tr-step-title').textContent =
-    `Step ${n} of 3 — ${n===1?'Select P4 Transfer Request(s)':n===2?'Logistics':'Costco Compliance & Submit'}`;
-  document.getElementById('tr-prev').style.display = n===1 ? 'none' : 'inline-block';
-  document.getElementById('tr-next').style.display = n===3 ? 'none' : 'inline-block';
-  document.getElementById('tr-submit').style.display = n===3 ? 'inline-block' : 'none';
+  ['1','2','3'].forEach(i => document.getElementById('tr-step-'+i).style.display = i==n.toString() ? 'block' : 'none');
+  document.getElementById('tr-title').textContent =
+    `New Transfer — Step ${n} of 3 ${n===1?'(P4 Picker)':n===2?'(Logistics)':'(Compliance & Submit)'}`;
+  document.getElementById('tr-prev').style.display = n===1 ? 'none' : 'inline-flex';
+  document.getElementById('tr-next').style.display = n===3 ? 'none' : 'inline-flex';
+  document.getElementById('tr-submit').style.display = n===3 ? 'inline-flex' : 'none';
 }
-
-function goNextStep() {
+function goNext() {
   if (currentStep === 1) {
     const picked = [...document.querySelectorAll('.p4-check:checked')];
-    if (!picked.length) { alert('Select at least one P4 request.'); return; }
+    if (!picked.length) return alert('Pick at least one P4 request.');
     selectedP4 = picked.map(c => c.dataset);
     const first = selectedP4[0];
-    const totalUnits = selectedP4.reduce((s, p) => s + parseInt(p.units || 0), 0);
+    const totalUnits = selectedP4.reduce((s,p)=>s+parseInt(p.units||0), 0);
     document.getElementById('tr-source-summary').innerHTML =
       `<strong>${first.from} → ${first.to}</strong><br>` +
       selectedP4.map(p => `${p.sku} (${parseInt(p.units).toLocaleString()} units)`).join('<br>') +
-      `<br><span style="color:#475569;">Total: ${totalUnits.toLocaleString()} units</span>`;
+      `<br><span class="text-muted">Total: ${totalUnits.toLocaleString()} units</span>`;
     showStep(2);
   } else if (currentStep === 2) {
-    // Build review block
     const mode = document.getElementById('tr-mode').selectedOptions[0].text;
     const equip = document.getElementById('tr-equip').value || '(not specified)';
     const pickup = document.getElementById('tr-pickup').value || '(not set)';
     const reason = document.getElementById('tr-reason').value;
-    document.getElementById('tr-review').innerHTML =
-      `<strong>Mode:</strong> ${mode}<br>` +
-      `<strong>Equipment:</strong> ${equip}<br>` +
-      `<strong>Pickup:</strong> ${pickup}<br>` +
-      `<strong>Reason:</strong> ${reason}<br>` +
-      `<strong>P4 lines:</strong> ${selectedP4.length}<br>`;
-    // Costco compliance banner
+    document.getElementById('tr-review').innerHTML = `
+      <p class="text-sm"><strong>Mode:</strong> ${mode}</p>
+      <p class="text-sm"><strong>Equipment:</strong> ${equip}</p>
+      <p class="text-sm"><strong>Pickup:</strong> ${pickup}</p>
+      <p class="text-sm"><strong>Reason:</strong> ${reason}</p>
+      <p class="text-sm"><strong>P4 lines:</strong> ${selectedP4.length}</p>`;
     const costcoP4 = selectedP4.find(p => p.costco);
     if (costcoP4) {
       document.getElementById('tr-costco-banner').style.display = 'block';
@@ -239,16 +188,15 @@ function goNextStep() {
     showStep(3);
   }
 }
-
-function goPrevStep() { if (currentStep > 1) showStep(currentStep - 1); }
+function goPrev() { if (currentStep > 1) showStep(currentStep - 1); }
 
 document.getElementById('tr-mode').addEventListener('change', e => {
   const v = e.target.value;
   const label = document.getElementById('tr-equip-label');
   const input = document.getElementById('tr-equip');
   if (v === 'c') {
-    label.innerHTML = 'Ocean Container # <span style="color:#791F1F;">(required for cross-dock)</span>';
-    input.placeholder = 'e.g., ONEU5559528 (Ocean Network Express)';
+    label.innerHTML = 'Ocean Container # <span style="color:var(--crit-fg);">(required)</span>';
+    input.placeholder = 'e.g., ONEU5559528 (ONE)';
   } else {
     label.textContent = 'Domestic Equipment Reference (optional)';
     input.placeholder = v === 'a' ? 'e.g., EMHU2241095 (J.B. Hunt EMP)' : 'e.g., TLR-KS-883201 (Knight-Swift)';
@@ -259,31 +207,25 @@ async function findCarriers() {
   if (!selectedP4) return;
   const first = selectedP4[0];
   const out = document.getElementById('tr-carriers');
-  out.innerHTML = '<em>Loading...</em>';
-  // Best-effort — uses origin/destination from P4
-  const url = `/api/rank-carriers?origin=${encodeURIComponent(first.from)}&destination=${encodeURIComponent('NewAge Perris CA')}&equipment=40HC&criticality=HIGH`;
-  try {
-    const res = await fetch(url);
-    const data = await res.json();
-    if (data.eligible && data.eligible.length) {
-      out.innerHTML = data.eligible.slice(0,5).map(c => `
-        <div style="padding:8px;border-bottom:0.5px solid var(--border);">
-          <strong>${c.carrier_name}</strong>
-          <span class="pill ${c.is_recommended?'low':'med'}" style="margin-left:6px;">$${c.base_rate}</span>
-          <span style="color:#64748B;font-size:11px;margin-left:6px;">composite ${c.composite_score}</span>
-          ${c.is_recommended ? '<span class="pill low" style="margin-left:6px;">RECOMMENDED</span>' : ''}
-        </div>
-      `).join('') + (data.excluded.length ? `<hr style="border:0;border-top:1px dashed var(--border);margin:8px 0;"><div style="color:#791F1F;font-size:11px;">Excluded: ${data.excluded.map(c=>`${c.carrier_name} (${c.exclusion_reason})`).join(' · ')}</div>` : '');
-    } else {
-      out.innerHTML = `<em>${data.note || 'No carriers found for this lane.'}</em>`;
-    }
-  } catch(e) {
-    out.innerHTML = `<em>Error: ${e.message}</em>`;
+  out.innerHTML = '<em>Loading…</em>';
+  const url = `/api/rank-carriers?origin=${encodeURIComponent(first.from)}&destination=NewAge%20Perris%20CA&equipment=40HC&criticality=HIGH`;
+  const r = await fetch(url);
+  const data = await r.json();
+  if (data.eligible && data.eligible.length) {
+    out.innerHTML = data.eligible.slice(0,5).map(c => `
+      <div style="padding:6px 0;border-bottom:0.5px solid var(--border);">
+        <strong>${c.carrier_name}</strong>
+        <span class="pill ${c.is_recommended?'ok':'med'}" style="margin-left:6px;">$${c.base_rate}</span>
+        <span class="text-xs text-muted" style="margin-left:6px;">composite ${c.composite_score}</span>
+        ${c.is_recommended ? '<span class="pill ok" style="margin-left:6px;">RECOMMENDED</span>' : ''}
+      </div>`).join('') + (data.excluded.length ? `<p class="text-xs mt-2" style="color:var(--crit-fg);">Excluded: ${data.excluded.map(c => c.carrier_name).join(', ')}</p>` : '');
+  } else {
+    out.innerHTML = `<em>${data.note || 'No carriers found.'}</em>`;
   }
 }
 
 function submitTransfer() {
-  alert('✓ Transfer submitted to Submitted column.\n\n(Demo: in production this writes to transfer_requests table and triggers approval workflow.)');
+  alert('✓ Transfer submitted to Submitted column.\n\nIn production: writes to transfer_requests table and triggers approval workflow.');
   closeTransferModal();
 }
 </script>

@@ -3,8 +3,36 @@
 {% block title %}Carrier Scorecard{% endblock %}
 {% block content %}
 <h2>Carrier Scorecard</h2>
-<p class="sub">Composite reliability score per carrier. Drives ranking + lane assignment.</p>
+<p class="sub">Composite reliability per carrier. Drives the ranking + lane assignment.</p>
 
+<div class="flex gap-2 items-center mb-3">
+  <label style="margin:0;">Carrier:</label>
+  <select id="carrier-pick" onchange="loadCarrier(this.value)">
+    {% for c in carriers %}
+    <option value="{{ c.carrier_name }}">{{ c.carrier_name }}</option>
+    {% endfor %}
+  </select>
+</div>
+
+<div class="kpis" style="grid-template-columns:repeat(5,1fr);" id="kpi-row">
+  <!-- filled by JS -->
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3 style="margin:0 0 10px;">12-Week Spend Trend</h3>
+    <canvas id="spend-chart" height="180"></canvas>
+  </div>
+  <div class="card">
+    <h3 style="margin:0 0 10px;">Exception History (trailing 90 days)</h3>
+    <table>
+      <thead><tr><th>Invoice</th><th>Rule</th><th>Severity</th><th class="right">$ at risk</th></tr></thead>
+      <tbody id="exc-tbody"><tr><td colspan="4" class="text-muted text-sm">Select a carrier to view.</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<h3>All Carriers — Comparison</h3>
 <table class="card">
   <thead><tr>
     <th>Carrier</th><th>Type</th>
@@ -30,7 +58,44 @@
   {% endfor %}
   </tbody>
 </table>
-<p style="font-size:11px;color:#64748B;margin-top:12px;font-style:italic;">
-  Composite ≥85 = eligible for HIGH-criticality lanes. ≥78 = eligible for MEDIUM. &lt;78 = LOW-criticality only.
+<p class="text-xs text-muted mt-2" style="font-style:italic;">
+  Composite ≥ 85 = eligible for HIGH-criticality lanes (hard floor). ≥ 78 = MEDIUM. &lt; 78 = LOW only.
 </p>
+
+<script>
+const carriers = {{ carriers|tojson }};
+let chart = null;
+
+function loadCarrier(name) {
+  const c = carriers.find(x => x.carrier_name === name);
+  if (!c) return;
+  document.getElementById('kpi-row').innerHTML = `
+    <div class="kpi"><div class="lbl">On-Time Pickup</div><div class="val">${(c.on_time_pickup||0).toFixed(0)}%</div></div>
+    <div class="kpi"><div class="lbl">On-Time Delivery</div><div class="val">${(c.on_time_delivery||0).toFixed(0)}%</div></div>
+    <div class="kpi"><div class="lbl">Invoice Accuracy</div><div class="val">${(c.invoice_accuracy||0).toFixed(0)}%</div></div>
+    <div class="kpi"><div class="lbl">Accessorial %</div><div class="val">${(c.accessorial_pct||0).toFixed(0)}%</div></div>
+    <div class="kpi ${(c.composite_score||0) >= 85 ? 'ok' : (c.composite_score||0) >= 78 ? 'high' : 'crit'}"><div class="lbl">Composite</div><div class="val">${(c.composite_score||0).toFixed(0)}</div></div>`;
+  // Mock 12-week spend
+  const weeks = Array.from({length:12}, (_,i) => `W${24-i}`).reverse();
+  const base = (c.trailing_90d_loads || 50) * (c.composite_score >= 85 ? 540 : 480);
+  const data = weeks.map(() => Math.round(base * (0.85 + Math.random()*0.3)));
+  if (chart) chart.destroy();
+  chart = new Chart(document.getElementById('spend-chart'), {
+    type: 'line',
+    data: { labels: weeks, datasets: [{ data, borderColor: '#0C447C', backgroundColor: 'rgba(12,68,124,0.1)', fill: true, tension: 0.3 }] },
+    options: { plugins: {legend: {display: false}}, responsive: true, maintainAspectRatio: false }
+  });
+  // Mock exception history
+  fetch('/api/scorecard/' + encodeURIComponent(name))
+    .then(r => r.json())
+    .then(rows => {
+      document.getElementById('exc-tbody').innerHTML = rows.length ? rows.map(e => `
+        <tr><td class="mono">${e.invoice_no}</td><td>${e.rule_family}</td>
+        <td><span class="pill ${e.severity==='CRITICAL'?'crit':e.severity==='HIGH'?'high':e.severity==='MEDIUM'?'med':'low'}">${e.severity}</span></td>
+        <td class="right">$${(e.dollars_at_risk||0).toFixed(2)}</td></tr>`).join('') :
+        '<tr><td colspan="4" class="text-muted text-sm">No exceptions in trailing 90 days. 🎉</td></tr>';
+    });
+}
+loadCarrier(carriers[0].carrier_name);
+</script>
 {% endblock %}

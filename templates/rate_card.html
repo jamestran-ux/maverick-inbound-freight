@@ -1,20 +1,20 @@
 {% extends "base.html" %}
 {% set active = "rate_card" %}
-{% block title %}Rate Card{% endblock %}
+{% block title %}Rate Card &amp; RFQ{% endblock %}
 {% block content %}
-<h2>Rate Card — {{ rows|length }} lanes</h2>
-<p class="sub">3+ carriers per lane. Carrier Type and Lane Criticality drive the ranking algorithm.</p>
+<h2>Rate Card &amp; RFQ — {{ rows|length }} lanes</h2>
+<p class="sub">Multi-carrier per lane. Carrier Type and Lane Criticality drive the ranking algorithm.</p>
 
-<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
+<div class="flex gap-2 items-center mb-3">
   <button class="btn btn-primary" onclick="openAdd()">+ Add Rate</button>
-  <input type="text" id="rc-search" placeholder="Search by carrier or lane" style="flex:1;padding:8px 10px;border:0.5px solid var(--border);border-radius:6px;font-size:13px;">
+  <input type="text" id="rc-search" placeholder="Search by carrier or lane" style="flex:1;">
 </div>
 
 <table class="card" id="rc-table">
   <thead><tr>
-    <th>Lane ID</th><th>Carrier</th><th>Carrier Type</th>
+    <th>Lane ID</th><th>Carrier</th><th>Type</th>
     <th>Origin</th><th>Destination</th><th>Crit</th>
-    <th class="right">Base Rate</th><th>FSC%</th><th>Tier</th>
+    <th class="right">Base</th><th>FSC%</th><th>Tier</th>
   </tr></thead>
   <tbody id="rc-tbody">
   {% for r in rows %}
@@ -33,17 +33,36 @@
   </tbody>
 </table>
 
+<h3>📩 RFQ Workflow</h3>
+<div class="card">
+  <div class="grid-3">
+    <div><label>Origin Terminal</label>
+      <select id="rfq-origin">
+        <option>Long Beach — Pier T</option><option>Long Beach — Pier J</option>
+        <option>Long Beach — ETS</option><option>Los Angeles — Pier 400</option>
+        <option>Los Angeles — Pier 300</option><option>Los Angeles — Pier A</option>
+        <option>Tacoma — Pier 4 (Husky)</option><option>Newark — Maher Terminal</option>
+      </select></div>
+    <div><label>Destination DC</label>
+      <select id="rfq-dest">
+        <option>NewAge Perris CA</option><option>NewAge Monee IL</option>
+        <option>NewAge Redlands CA</option><option>CSX Joliet Intermodal</option>
+      </select></div>
+    <div><label>Lane Criticality</label>
+      <select id="rfq-crit"><option>HIGH</option><option>MEDIUM</option><option>LOW</option></select></div>
+  </div>
+  <div class="mt-3"><button class="btn btn-primary" onclick="runRFQ()">Find &amp; rank carriers</button></div>
+  <div id="rfq-results" class="mt-3"></div>
+</div>
+
 <!-- Add Rate Modal -->
 <div id="add-modal" class="modal-backdrop" style="display:none;">
   <div class="modal">
-    <div class="modal-header">
-      <h3>+ Add Rate</h3>
-      <button class="modal-close" onclick="closeAdd()">×</button>
-    </div>
+    <div class="modal-header"><h3>+ Add Rate</h3><button class="modal-close" onclick="closeAdd()">×</button></div>
     <div class="modal-body">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div><label>Lane ID</label><input id="f-lane" placeholder="auto-generated" disabled></div>
-        <div><label>Carrier</label><input id="f-carrier" placeholder="e.g., Pacific Coastline Drayage"></div>
+      <div class="grid-2">
+        <div><label>Lane ID</label><input id="f-lane" placeholder="auto" disabled></div>
+        <div><label>Carrier</label><input id="f-carrier" placeholder="Pacific Coastline Drayage"></div>
         <div><label>Carrier Type</label>
           <select id="f-ctype">
             <option>Third-Party Dray</option>
@@ -52,12 +71,9 @@
             <option>Rail Carrier Dray</option>
           </select></div>
         <div><label>Tier</label>
-          <select id="f-tier">
-            <option>Primary</option><option>Backup</option><option>Spot</option>
-            <option>Carrier Haulage</option><option>Rail Bundled</option>
-          </select></div>
-        <div><label>Origin</label><input id="f-origin" placeholder="e.g., Long Beach — Pier T"></div>
-        <div><label>Destination</label><input id="f-dest" placeholder="e.g., NewAge Perris CA"></div>
+          <select id="f-tier"><option>Primary</option><option>Backup</option><option>Spot</option></select></div>
+        <div><label>Origin</label><input id="f-origin" placeholder="Long Beach — Pier T"></div>
+        <div><label>Destination</label><input id="f-dest" placeholder="NewAge Perris CA"></div>
         <div><label>Lane Criticality</label>
           <select id="f-crit"><option>HIGH</option><option>MEDIUM</option><option>LOW</option></select></div>
         <div><label>Equipment</label>
@@ -65,9 +81,7 @@
         <div><label>Base Rate (USD)</label><input id="f-base" type="number" placeholder="495"></div>
         <div><label>FSC %</label><input id="f-fsc" type="number" placeholder="22"></div>
       </div>
-      <label style="margin-top:14px;display:block;">Notes</label>
-      <textarea id="f-notes" placeholder="Optional notes" rows="2" style="width:100%;padding:8px 10px;border:0.5px solid var(--border);border-radius:6px;font-family:inherit;font-size:13px;"></textarea>
-      <div id="add-status" style="margin-top:12px;font-size:13px;"></div>
+      <div id="add-status" class="mt-3"></div>
     </div>
     <div class="modal-footer">
       <button class="btn" onclick="closeAdd()">Cancel</button>
@@ -75,28 +89,6 @@
     </div>
   </div>
 </div>
-
-<style>
-.btn { padding:8px 14px; border:0.5px solid var(--border); border-radius:6px;
-       background:#fff; cursor:pointer; font-size:13px; }
-.btn:hover { background:#F6F8FB; }
-.btn-primary { background:#0C447C; color:#fff; border-color:#0C447C; }
-.btn-primary:hover { background:#0A3866; }
-.modal-backdrop { position:fixed; inset:0; background:rgba(15,23,42,0.5); z-index:1000;
-                  display:flex; align-items:center; justify-content:center; padding:24px; }
-.modal { background:#fff; border-radius:12px; max-width:700px; width:100%;
-         display:flex; flex-direction:column; overflow:hidden; max-height:90vh; }
-.modal-header { display:flex; justify-content:space-between; align-items:center;
-                padding:14px 20px; border-bottom:0.5px solid var(--border); }
-.modal-close { border:0; background:transparent; font-size:22px; cursor:pointer; color:#64748B; }
-.modal-body { padding:16px 20px; overflow-y:auto; }
-.modal-body label { display:block; font-size:11px; color:#475569; text-transform:uppercase;
-                    letter-spacing:0.4px; margin-bottom:4px; }
-.modal-body input, .modal-body select { width:100%; padding:8px 10px; border:0.5px solid var(--border);
-                                         border-radius:6px; font-size:13px; }
-.modal-footer { display:flex; gap:8px; justify-content:flex-end; padding:12px 20px;
-                border-top:0.5px solid var(--border); background:#F6F8FB; }
-</style>
 
 <script>
 let addCounter = 400;
@@ -108,30 +100,74 @@ function openAdd() {
 function closeAdd() { document.getElementById('add-modal').style.display = 'none'; }
 function saveRate() {
   const carrier = document.getElementById('f-carrier').value.trim();
-  if (!carrier) { alert('Carrier name required.'); return; }
-  const newRow = `
-    <tr style="background:#FFF9E6;animation:fade 5s ease-out forwards;">
-      <td class="mono">${document.getElementById('f-lane').value}</td>
-      <td>${carrier}</td>
-      <td><span class="pill low">${document.getElementById('f-ctype').value}</span></td>
-      <td>${document.getElementById('f-origin').value}</td>
-      <td>${document.getElementById('f-dest').value}</td>
-      <td><span class="pill crit">${document.getElementById('f-crit').value}</span></td>
-      <td class="right">$${parseFloat(document.getElementById('f-base').value || 0).toFixed(0)}</td>
-      <td>${document.getElementById('f-fsc').value}%</td>
-      <td>${document.getElementById('f-tier').value} <span class="pill low" style="margin-left:4px;">NEW</span></td>
-    </tr>`;
-  document.getElementById('rc-tbody').insertAdjacentHTML('afterbegin', newRow);
-  document.getElementById('add-status').innerHTML =
-    '<span style="color:#085041;">✓ Rate added to top of table (in-memory; refresh to revert).</span>';
-  setTimeout(closeAdd, 1500);
+  if (!carrier) return alert('Carrier name required.');
+  const tbody = document.getElementById('rc-tbody');
+  const tr = document.createElement('tr');
+  tr.style.background = '#FFF9E6';
+  tr.innerHTML = `
+    <td class="mono">${document.getElementById('f-lane').value}</td>
+    <td>${carrier}</td>
+    <td><span class="pill low">${document.getElementById('f-ctype').value}</span></td>
+    <td>${document.getElementById('f-origin').value}</td>
+    <td>${document.getElementById('f-dest').value}</td>
+    <td><span class="pill crit">${document.getElementById('f-crit').value}</span></td>
+    <td class="right">$${parseFloat(document.getElementById('f-base').value||0).toFixed(0)}</td>
+    <td>${document.getElementById('f-fsc').value}%</td>
+    <td>${document.getElementById('f-tier').value} <span class="pill low" style="margin-left:4px;">NEW</span></td>`;
+  tbody.insertBefore(tr, tbody.firstChild);
+  document.getElementById('add-status').innerHTML = '<span class="pos">✓ Rate added.</span>';
+  setTimeout(closeAdd, 1200);
 }
-// Search filter
+
 document.getElementById('rc-search').addEventListener('input', e => {
   const q = e.target.value.toLowerCase();
   document.querySelectorAll('#rc-tbody tr').forEach(tr => {
     tr.style.display = !q || tr.dataset.search.toLowerCase().includes(q) ? '' : 'none';
   });
 });
+
+async function runRFQ() {
+  const origin = document.getElementById('rfq-origin').value;
+  const dest = document.getElementById('rfq-dest').value;
+  const crit = document.getElementById('rfq-crit').value;
+  const out = document.getElementById('rfq-results');
+  out.innerHTML = '<em>Ranking carriers…</em>';
+  const url = `/api/rank-carriers?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(dest)}&equipment=40HC&criticality=${crit}`;
+  const r = await fetch(url);
+  const data = await r.json();
+  if (!data.eligible || !data.eligible.length) {
+    out.innerHTML = `<em>${data.note || 'No carriers found for this lane.'}</em>`;
+    return;
+  }
+  out.innerHTML = `
+    <div class="text-sm text-muted mb-2">Lane: ${data.lane} · Criticality: <strong>${data.criticality}</strong> · Weighting: ${(data.weighting.composite*100).toFixed(0)}% reliability + ${(data.weighting.cost*100).toFixed(0)}% cost ${data.weighting.floor ? `· Hard floor: composite ≥ ${data.weighting.floor}` : ''}</div>
+    <table>
+      <thead><tr><th>Carrier</th><th>Type</th><th class="right">Rate</th><th class="right">Composite</th><th>Status</th></tr></thead>
+      <tbody>
+      ${data.eligible.map(c => `
+        <tr>
+          <td><strong>${c.carrier_name}</strong></td>
+          <td><span class="pill ${c.carrier_type?.includes('Ocean')||c.carrier_type?.includes('Rail')?'crit':c.carrier_type?.includes('Premium')?'med':'low'}">${c.carrier_type}</span></td>
+          <td class="right">$${c.base_rate.toFixed(0)}</td>
+          <td class="right">${c.composite_score?.toFixed(0) || '—'}</td>
+          <td>${c.is_recommended ? '<span class="pill ok">RECOMMENDED</span>' : c.tier || ''}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    ${data.excluded?.length ? `
+    <p class="text-sm mt-3" style="color:var(--crit-fg);"><strong>Excluded</strong> (below ${data.criticality} threshold):</p>
+    <table>
+      <thead><tr><th>Carrier</th><th class="right">Rate</th><th class="right">Composite</th><th>Reason</th></tr></thead>
+      <tbody>
+      ${data.excluded.map(c => `
+        <tr style="opacity:.6;">
+          <td>${c.carrier_name}</td>
+          <td class="right">$${c.base_rate.toFixed(0)}</td>
+          <td class="right">${c.composite_score?.toFixed(0)}</td>
+          <td class="text-xs">${c.exclusion_reason}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>` : ''}`;
+}
 </script>
 {% endblock %}

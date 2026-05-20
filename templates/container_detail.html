@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% set active = "containers" %}
+{% block title %}{{ container.number }}{% endblock %}
+{% block content %}
+<p><a href="/containers" class="text-sm">← Back to containers</a></p>
+<h2><span class="mono">{{ container.number }}</span></h2>
+<p class="sub">{{ container.steamship_line }} · {{ container.vessel }} · {{ container.origin_port }} → {{ container.us_port }}</p>
+
+<div class="card">
+  <div class="grid-4">
+    <div><div class="text-xs text-muted">Stage</div><div><span class="pill {{ 'crit' if container.demurrage_risk and 'CRITICAL' in (container.demurrage_risk or '') else 'high' if container.stage=='In Customs' else 'low' if container.stage=='Out-Gate Ready' else 'med' }}">{{ container.stage }}</span></div></div>
+    <div><div class="text-xs text-muted">Container Status</div><div>{{ container.container_status or "—" }}</div></div>
+    <div><div class="text-xs text-muted">LFD</div><div>{{ container.lfd or "—" }}</div></div>
+    <div><div class="text-xs text-muted">Pickup</div><div>{{ container.pickup_date or "Not yet" }}</div></div>
+    <div><div class="text-xs text-muted">Customs</div><div>{{ container.customs_status }}</div></div>
+    <div><div class="text-xs text-muted">SSL Released</div><div>{{ container.ssl_released }}</div></div>
+    <div><div class="text-xs text-muted">Days at Loc</div><div>{{ container.days_at_location or "—" }}</div></div>
+    <div><div class="text-xs text-muted">Demurrage Risk</div><div>{{ container.demurrage_risk or "—" }}</div></div>
+  </div>
+  {% if container.notes %}<p class="text-sm mt-3" style="color:var(--text-2);font-style:italic;">{{ container.notes }}</p>{% endif %}
+</div>
+
+<div class="grid-2 mt-3">
+  <div class="card">
+    <h3 style="margin:0 0 12px;">Milestones</h3>
+    <div class="timeline">
+      {% for m in milestones %}
+      <div class="mile {{ m.state }}">
+        <div class="dot"></div>
+        <div class="info">
+          <div class="name">{{ m.name }}</div>
+          <div class="ts">{{ m.ts or "—" }}</div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 12px;">Actions</h3>
+    {% if action %}
+    <div class="ai-card" style="margin-bottom:14px;">
+      <div><span class="badge">AI</span><span class="label">Recommended action</span></div>
+      <div style="font-weight:600;margin-top:8px;">{{ action.action_text }}</div>
+      <div class="text-sm mt-2">{{ action.rationale_text }}</div>
+      <div class="text-sm mt-2"><strong>Estimated $ at stake:</strong> ${{ "{:,.0f}".format(action.dollars_saved or 0) }}</div>
+    </div>
+    {% endif %}
+
+    <div class="flex gap-2 mb-3" style="flex-wrap:wrap;">
+      {% if container.stage == 'Out-Gate Ready' and not container.pickup_date %}
+      <button class="btn btn-primary" onclick="sendAction('dispatch')">📤 Send Dispatch Instruction</button>
+      {% endif %}
+      {% if container.stage == 'Delivered' and container.container_status == 'Empty' %}
+      <button class="btn btn-primary" onclick="sendAction('return')">📦 Send Empty Return</button>
+      {% endif %}
+      <button class="btn" onclick="sendAction('schedule')">📅 Schedule Appointment</button>
+    </div>
+
+    {% if pos %}
+    <hr style="border:0;border-top:1px solid var(--border);margin:14px 0;">
+    <h4 style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:var(--text-2);">Linked PO(s)</h4>
+    {% for p in pos %}
+    <p class="text-sm" style="margin:4px 0;"><span class="mono">{{ p.po_no }}</span> · {{ p.sku_family }} · {{ "{:,}".format(p.units or 0) }} units · ${{ "{:,.0f}".format(p.value or 0) }}</p>
+    {% endfor %}
+    {% endif %}
+
+    {% if invoices %}
+    <hr style="border:0;border-top:1px solid var(--border);margin:14px 0;">
+    <h4 style="margin:0 0 8px;font-size:12px;text-transform:uppercase;color:var(--text-2);">Linked Invoice(s)</h4>
+    {% for inv in invoices %}
+    <p class="text-sm" style="margin:4px 0;"><a href="/drayage-invoices/{{ inv.invoice_no }}" class="mono">{{ inv.invoice_no }}</a> · ${{ "{:,.2f}".format(inv.grand_total or 0) }} · {{ inv.status }}</p>
+    {% endfor %}
+    {% endif %}
+  </div>
+</div>
+
+<div id="action-modal" class="modal-backdrop" style="display:none;">
+  <div class="modal">
+    <div class="modal-header"><h3 id="am-title">Action</h3><button class="modal-close" onclick="closeAction()">×</button></div>
+    <div class="modal-body" id="am-body"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeAction()">Cancel</button>
+      <button class="btn btn-primary" id="am-gmail">Open in Gmail</button>
+    </div>
+  </div>
+</div>
+
+<script>
+async function sendAction(kind) {
+  const titles = {dispatch:'Dispatch Instruction', return:'Empty Return Request', schedule:'Appointment Request'};
+  document.getElementById('am-title').textContent = titles[kind] || 'Action';
+  document.getElementById('am-body').innerHTML = '<em>Drafting…</em>';
+  document.getElementById('action-modal').style.display = 'flex';
+  const res = await fetch('/api/containers/{{ container.number }}/action', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({kind})
+  });
+  const data = await res.json();
+  const e = data.email;
+  document.getElementById('am-body').innerHTML = `
+    <div class="email-block">
+      <div class="eh">To</div><div class="ev mono">${esc(e.to)}</div>
+      <div class="eh">Subject</div><div class="ev">${esc(e.subject)}</div>
+      <div class="eh">Body</div><pre>${esc(e.body)}</pre>
+    </div>`;
+  document.getElementById('am-gmail').onclick = () => {
+    const enc = encodeURIComponent;
+    window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=${enc(e.to)}&su=${enc(e.subject)}&body=${enc(e.body)}`, '_blank');
+  };
+}
+function closeAction() { document.getElementById('action-modal').style.display = 'none'; }
+function esc(s) { return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+</script>
+{% endblock %}

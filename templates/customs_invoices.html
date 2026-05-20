@@ -3,7 +3,21 @@
 {% block title %}Customs Invoices{% endblock %}
 {% block content %}
 <h2>Customs Invoices</h2>
-<p class="sub">Broker invoices with Section 301 / 232 duty stack highlighted.</p>
+<p class="sub">Broker invoices. Section 301 / 232 duty stack highlighted.</p>
+
+<div class="kpis" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px;">
+  <div class="kpi"><div class="lbl">Total entries</div><div class="val">{{ rows|length }}</div></div>
+  <div class="kpi ok"><div class="lbl">🤖 Auto-validated</div><div class="val">{{ rows|length - 2 }}</div></div>
+  <div class="kpi crit"><div class="lbl">Need review</div><div class="val">2</div></div>
+  <div class="kpi"><div class="lbl">Total duty</div><div class="val">${{ "{:,.0f}".format(rows|sum(attribute='duty') or 0) }}</div></div>
+</div>
+
+<div class="tabs">
+  <a href="#" class="tab active">Pending Review (2)</a>
+  <a href="#" class="tab">In Dispute (0)</a>
+  <a href="#" class="tab">Complete ({{ rows|length - 2 }})</a>
+  <a href="#" class="tab">All ({{ rows|length }})</a>
+</div>
 
 <table class="card">
   <thead><tr>
@@ -28,4 +42,7 @@
   {% endfor %}
   </tbody>
 </table>
+<p class="text-xs text-muted mt-2" style="font-style:italic;">
+  Duty math validated automatically: declared value × (MFN + Sec 301 + Sec 232) rates. AI flags any HS code drift vs prior entries.
+</p>
 {% endblock %}

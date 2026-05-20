@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% set active = "loads" %}
+{% block title %}{{ load.fb_no }}{% endblock %}
+{% block content %}
+<p><a href="/loads" class="text-sm">← Back to loads</a></p>
+<h2>{{ load.fb_no }}</h2>
+<p class="sub">{{ load.carrier_name or "(unassigned)" }} · {{ load.origin or "—" }} → {{ load.destination or "—" }}</p>
+
+<div class="card">
+  <div class="grid-4">
+    <div><div class="text-xs text-muted" style="text-transform:uppercase;letter-spacing:.5px;">Container</div><div class="mono">{{ load.container_no or "—" }}</div></div>
+    <div><div class="text-xs text-muted" style="text-transform:uppercase;letter-spacing:.5px;">BOL/MBL</div><div class="mono">{{ load.bol or "—" }}</div></div>
+    <div><div class="text-xs text-muted" style="text-transform:uppercase;letter-spacing:.5px;">Shipment Date</div><div>{{ load.shipment_date or "—" }}</div></div>
+    <div><div class="text-xs text-muted" style="text-transform:uppercase;letter-spacing:.5px;">Status</div><div><span class="pill {{ 'crit' if 'Exception' in (load.status or '') else 'med' if load.status in ('Awaiting Discharge','In Customs','Awaiting Release') else 'high' if load.status=='Ready to Outgate' else 'low' if load.status in ('Approved','Completed') else 'blue' }}">{{ load.status or "—" }}</span></div></div>
+  </div>
+</div>
+
+<div class="grid-2 mt-3">
+  <div class="card">
+    <h3 style="margin:0 0 12px;">Milestones</h3>
+    <div class="timeline">
+      {% for m in milestones %}
+      <div class="mile {{ m.state }}">
+        <div class="dot"></div>
+        <div class="info">
+          <div class="name">{{ m.name }}</div>
+          <div class="ts">{{ m.ts or "—" }}</div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 12px;">Linked Records</h3>
+    {% if container %}
+      <p class="text-sm"><strong>Container:</strong> <span class="mono">{{ container.number }}</span> ({{ container.stage }})</p>
+      <p class="text-sm"><strong>SSL:</strong> {{ container.steamship_line }} on {{ container.vessel }}</p>
+      <p class="text-sm"><strong>LFD:</strong> {{ container.lfd or "—" }} · <strong>Free time:</strong> {{ container.free_time_days }}d</p>
+      <p class="text-sm"><strong>Risk:</strong> {{ container.demurrage_risk or "—" }}</p>
+      <p><a href="/containers/{{ container.number }}" class="btn btn-sm">Open container detail →</a></p>
+    {% endif %}
+    {% if invoice %}
+      <hr style="border:0;border-top:1px solid var(--border);margin:12px 0;">
+      <p class="text-sm"><strong>Invoice:</strong> <a href="/drayage-invoices/{{ invoice.invoice_no }}" class="mono">{{ invoice.invoice_no }}</a></p>
+      <p class="text-sm"><strong>Grand total:</strong> ${{ "{:,.2f}".format(invoice.grand_total or 0) }}</p>
+    {% endif %}
+
+    {% if load.status == 'Ready to Outgate' %}
+    <hr style="border:0;border-top:1px solid var(--border);margin:12px 0;">
+    <button class="btn btn-primary" onclick="sendDispatch()">📤 Send Dispatch Instruction</button>
+    {% endif %}
+  </div>
+</div>
+
+<div id="email-modal" class="modal-backdrop" style="display:none;">
+  <div class="modal">
+    <div class="modal-header"><h3>Dispatch Instruction</h3><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="modal-gmail">Open in Gmail</button>
+    </div>
+  </div>
+</div>
+
+<script>
+async function sendDispatch() {
+  const res = await fetch('/api/loads/dispatch', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({load_ids:['{{ load.fb_no }}']})
+  });
+  const data = await res.json();
+  const first = data.emails?.[0];
+  if (!first) return alert('No email generated.');
+  document.getElementById('modal-body').innerHTML = `
+    <div class="email-block">
+      <div class="eh">To</div><div class="ev mono">${esc(first.to)}</div>
+      <div class="eh">Subject</div><div class="ev">${esc(first.subject)}</div>
+      <div class="eh">Body</div><pre>${esc(first.body)}</pre>
+    </div>`;
+  document.getElementById('modal-gmail').onclick = () => {
+    const enc = encodeURIComponent;
+    window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=${enc(first.to)}&su=${enc(first.subject)}&body=${enc(first.body)}`, '_blank');
+  };
+  document.getElementById('email-modal').style.display = 'flex';
+}
+function closeModal() { document.getElementById('email-modal').style.display = 'none'; }
+function esc(s) { return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+</script>
+{% endblock %}

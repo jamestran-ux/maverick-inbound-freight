@@ -5,15 +5,23 @@
 <h2>GL Reconciliation — {{ period }}</h2>
 <p class="sub">Accrued vs actual by GL account. Generate journal entries on close.</p>
 
+<div class="flex gap-2 items-center mb-3">
+  <select id="period">
+    <option>2026-05</option><option>2026-04</option><option>2026-03</option>
+  </select>
+  <span class="flex-1"></span>
+  <button class="btn btn-primary" onclick="genJournal()">📝 Generate Journal Entries</button>
+</div>
+
 <table class="card">
   <thead><tr>
     <th>Account</th><th>Name</th>
     <th class="right">Accrued</th><th class="right">Actual</th>
-    <th class="right">Variance</th><th>Status</th>
+    <th class="right">Variance</th><th>Status</th><th>Actions</th>
   </tr></thead>
   <tbody>
   {% for r in rows %}
-  <tr>
+  <tr class="clickable" onclick="drillDown('{{ r.account_code }}', '{{ r.account_name }}', {{ r.variance or 0 }})">
     <td class="mono">{{ r.account_code }}</td>
     <td>{{ r.account_name }}</td>
     <td class="right">${{ "{:,.0f}".format(r.accrued or 0) }}</td>
@@ -22,8 +30,70 @@
       {% if (r.variance or 0) >= 0 %}+{% endif %}${{ "{:,.0f}".format(r.variance or 0) }}
     </td>
     <td><span class="pill med">{{ r.status }}</span></td>
+    <td class="text-xs"><a href="#" onclick="event.stopPropagation(); drillDown('{{ r.account_code }}', '{{ r.account_name }}', {{ r.variance or 0 }});">Drill down →</a></td>
   </tr>
   {% endfor %}
   </tbody>
 </table>
+
+<div id="drill-modal" class="modal-backdrop" style="display:none;">
+  <div class="modal">
+    <div class="modal-header"><h3 id="dm-title">Account drill-down</h3><button class="modal-close" onclick="closeDrill()">×</button></div>
+    <div class="modal-body" id="dm-body"></div>
+    <div class="modal-footer"><button class="btn" onclick="closeDrill()">Close</button></div>
+  </div>
+</div>
+
+<div id="je-modal" class="modal-backdrop" style="display:none;">
+  <div class="modal wide">
+    <div class="modal-header"><h3>Journal Entry Preview — SAP B1 DTW Format</h3><button class="modal-close" onclick="closeJE()">×</button></div>
+    <div class="modal-body">
+      <p class="text-sm text-muted mb-3">CSV ready for import via SAP B1 DTW / Service Layer. Copy or download.</p>
+      <pre id="je-csv" style="background:var(--bg-alt);padding:14px;border-radius:8px;font-size:11px;line-height:1.5;font-family:'JetBrains Mono',monospace;overflow-x:auto;"></pre>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeJE()">Cancel</button>
+      <button class="btn btn-primary" onclick="copyJE()">📋 Copy CSV</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function drillDown(code, name, variance) {
+  document.getElementById('dm-title').textContent = `${code} ${name} — drill-down`;
+  document.getElementById('dm-body').innerHTML = `
+    <p class="text-sm">Source invoice lines contributing to "Actual" for this account this period:</p>
+    <table>
+      <thead><tr><th>Invoice</th><th>Date</th><th>Description</th><th class="right">Amount</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">PCD-INV-50016</td><td>2026-05-07</td><td>Excess accessorials</td><td class="right">$750.00</td></tr>
+        <tr><td class="mono">PCD-INV-50025</td><td>2026-05-08</td><td>Demurrage pass-through</td><td class="right">$375.00</td></tr>
+        <tr><td class="mono">PCD-INV-50019</td><td>2026-05-07</td><td>Duplicate chassis</td><td class="right">$105.00</td></tr>
+        <tr><td class="mono">ACS-INV-21003</td><td>2026-05-07</td><td>TONU</td><td class="right">$295.00</td></tr>
+      </tbody>
+    </table>
+    <p class="text-sm mt-3 text-muted">Variance of ${variance >= 0 ? '+' : ''}\$${Math.abs(variance).toLocaleString()} is driven primarily by accessorial leakage and demurrage exposure flagged by the audit engine.</p>`;
+  document.getElementById('drill-modal').style.display = 'flex';
+}
+function closeDrill() { document.getElementById('drill-modal').style.display = 'none'; }
+
+function genJournal() {
+  const csv = `JournalEntry,Series,ReferenceDate,Memo
+GL-2026-05-001,Manual,2026-05-31,Inbound freight accrual true-up — period close
+
+JournalLine,GLAccount,Debit,Credit,Reference
+1,5210,3653.00,,Freight-Inbound variance
+2,5215,,3200.00,Duty variance
+3,5220,280.00,,Brokerage variance
+4,5225,,1810.00,Demurrage/Detention variance
+5,2300,,1077.00,Accrued Freight Payable (clearing)`;
+  document.getElementById('je-csv').textContent = csv;
+  document.getElementById('je-modal').style.display = 'flex';
+}
+function closeJE() { document.getElementById('je-modal').style.display = 'none'; }
+function copyJE() {
+  navigator.clipboard.writeText(document.getElementById('je-csv').textContent);
+  alert('Copied! Paste into SAP B1 DTW JournalEntries import template.');
+}
+</script>
 {% endblock %}

@@ -5,29 +5,27 @@
 <h2>Load Visibility</h2>
 <p class="sub">All inbound loads + pre-arrival pipeline. Multi-select to batch dispatch. Filter by status, carrier, origin.</p>
 
-<!-- Action bar -->
-<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
+<div class="flex gap-2 items-center mb-3" style="flex-wrap:wrap;">
   <button id="btn-prearrival" class="btn btn-primary">📧 Send Pre-Arrival Forecast</button>
-  <button id="btn-batch" class="btn btn-primary" disabled>📤 Send Batch Dispatch Instruction <span id="batch-count" style="opacity:.6;"></span></button>
-  <span style="flex:1;"></span>
-  <span style="color:#64748B;font-size:12px;" id="row-count">{{ loads|length }} loads</span>
+  <button id="btn-batch" class="btn btn-primary" disabled>📤 Send Batch Dispatch <span id="batch-count" style="opacity:.7;"></span></button>
+  <span class="flex-1"></span>
+  <span class="text-sm text-muted" id="row-count">{{ loads|length }} loads</span>
 </div>
 
-<!-- Filter bar -->
-<div class="card" style="padding:10px 14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
-  <input type="text" id="search" placeholder="Search Load / Container / BOL" style="flex:1;min-width:240px;padding:8px 10px;border:0.5px solid var(--border);border-radius:6px;font-size:13px;">
-  <select id="filter-status" style="padding:8px 10px;border:0.5px solid var(--border);border-radius:6px;font-size:13px;">
+<div class="card" style="padding:10px 14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
+  <input type="text" id="search" placeholder="Search Load / Container / BOL" style="flex:1;min-width:240px;">
+  <select id="filter-status">
     <option value="">All statuses</option>
     {% for s in ['Awaiting Discharge','In Customs','Awaiting Release','Ready to Outgate','Sent to Carrier','In Transit','Delivered','Invoice Pending','Audit Exception','Approved','Completed'] %}
     <option value="{{ s }}">{{ s }}</option>
     {% endfor %}
   </select>
-  <select id="filter-carrier" style="padding:8px 10px;border:0.5px solid var(--border);border-radius:6px;font-size:13px;">
+  <select id="filter-carrier">
     <option value="">All carriers</option>
     {% set carriers = loads|map(attribute='carrier_name')|select|unique|list %}
     {% for c in carriers %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
   </select>
-  <select id="filter-port" style="padding:8px 10px;border:0.5px solid var(--border);border-radius:6px;font-size:13px;">
+  <select id="filter-port">
     <option value="">All origins</option>
     {% set ports = loads|map(attribute='origin')|select|unique|list %}
     {% for p in ports %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
@@ -36,34 +34,41 @@
 
 <table class="card" id="loads-table">
   <thead><tr>
-    <th style="width:24px;"><input type="checkbox" id="select-all"></th>
-    <th data-sort="fb_no">Load ID / FB# ▾</th>
-    <th data-sort="container_no">Container #</th>
-    <th data-sort="carrier_name">Carrier</th>
-    <th data-sort="origin">Origin</th>
-    <th data-sort="destination">Destination</th>
-    <th data-sort="shipment_date">Date</th>
-    <th data-sort="status">Status</th>
+    <th style="width:30px;"><input type="checkbox" id="select-all"></th>
+    <th data-sort>Load ID</th>
+    <th data-sort>Container #</th>
+    <th data-sort>Carrier</th>
+    <th data-sort>Origin</th>
+    <th data-sort>Destination</th>
+    <th data-sort>Date</th>
+    <th data-sort>Status</th>
+    <th>Action</th>
   </tr></thead>
   <tbody id="loads-tbody">
   {% for l in loads %}
-  <tr data-fb="{{ l.fb_no }}" data-status="{{ l.status or '' }}" data-carrier="{{ l.carrier_name or '' }}" data-origin="{{ l.origin or '' }}" data-search="{{ (l.fb_no or '') ~ ' ' ~ (l.container_no or '') ~ ' ' ~ (l.bol or '') }}">
-    <td><input type="checkbox" class="row-check" data-status="{{ l.status or '' }}" {% if l.status != 'Ready to Outgate' %}disabled{% endif %}></td>
+  <tr class="clickable" data-fb="{{ l.fb_no }}" data-status="{{ l.status or '' }}" data-carrier="{{ l.carrier_name or '' }}" data-origin="{{ l.origin or '' }}" data-search="{{ (l.fb_no or '') ~ ' ' ~ (l.container_no or '') ~ ' ' ~ (l.bol or '') }}">
+    <td onclick="event.stopPropagation()"><input type="checkbox" class="row-check" {% if l.status != 'Ready to Outgate' %}disabled{% endif %}></td>
     <td class="mono">{{ l.fb_no }}</td>
     <td class="mono">{{ l.container_no or "—" }}</td>
     <td>{{ l.carrier_name or "—" }}</td>
     <td>{{ l.origin or "—" }}</td>
     <td>{{ l.destination or "—" }}</td>
     <td>{{ l.shipment_date or "—" }}</td>
-    <td><span class="pill {{ 'crit' if 'Exception' in (l.status or '') else 'med' if l.status in ('Awaiting Discharge','In Customs','Awaiting Release') else 'high' if l.status=='Ready to Outgate' else 'low' if l.status in ('Approved','Completed') else 'pending' }}">{{ l.status or "—" }}</span></td>
+    <td><span class="pill {{ 'crit' if 'Exception' in (l.status or '') else 'med' if l.status in ('Awaiting Discharge','In Customs','Awaiting Release') else 'high' if l.status=='Ready to Outgate' else 'blue' if l.status in ('Sent to Carrier','In Transit') else 'low' if l.status in ('Approved','Completed') else 'gray' }}">{{ l.status or "—" }}</span></td>
+    <td class="text-xs">
+      {% if l.status == 'Audit Exception' %}<span class="neg">Review exception</span>
+      {% elif l.status == 'Ready to Outgate' %}<span class="high">Dispatch ASAP</span>
+      {% elif l.status in ('Awaiting Discharge','In Customs','Awaiting Release') %}<span class="text-muted">Monitor</span>
+      {% else %}—{% endif %}
+    </td>
   </tr>
   {% endfor %}
   </tbody>
 </table>
 
-<!-- Modal for email drafts -->
+<!-- Modal -->
 <div id="email-modal" class="modal-backdrop" style="display:none;">
-  <div class="modal">
+  <div class="modal wide">
     <div class="modal-header">
       <h3 id="modal-title">Email Draft</h3>
       <button class="modal-close" onclick="closeModal()">×</button>
@@ -77,96 +82,65 @@
   </div>
 </div>
 
-<style>
-.btn { padding:8px 14px; border:0.5px solid var(--border); border-radius:6px;
-       background:#fff; cursor:pointer; font-size:13px; }
-.btn:hover { background:#F6F8FB; }
-.btn-primary { background:#0C447C; color:#fff; border-color:#0C447C; }
-.btn-primary:hover { background:#0A3866; }
-.btn-primary:disabled { opacity:.45; cursor:not-allowed; }
-.modal-backdrop { position:fixed; inset:0; background:rgba(15,23,42,0.5); z-index:1000;
-                  display:flex; align-items:center; justify-content:center; padding:24px; }
-.modal { background:#fff; border-radius:12px; max-width:760px; width:100%; max-height:90vh;
-         display:flex; flex-direction:column; overflow:hidden; }
-.modal-header { display:flex; justify-content:space-between; align-items:center;
-                padding:14px 20px; border-bottom:0.5px solid var(--border); }
-.modal-header h3 { margin:0; font-size:16px; }
-.modal-close { border:0; background:transparent; font-size:22px; cursor:pointer; color:#64748B; }
-.modal-body { padding:16px 20px; overflow-y:auto; flex:1; }
-.modal-footer { display:flex; gap:8px; justify-content:flex-end; padding:12px 20px;
-                border-top:0.5px solid var(--border); background:#F6F8FB; }
-.email-block { background:#F6F8FB; padding:14px; border-radius:8px;
-               margin-bottom:12px; border-left:3px solid #0C447C; }
-.email-block .eh { font-size:11px; color:#64748B; text-transform:uppercase;
-                   letter-spacing:0.6px; }
-.email-block .ev { font-size:13px; margin:2px 0 6px; font-weight:500; }
-.email-block pre { white-space:pre-wrap; font-family:inherit; margin:8px 0 0;
-                   font-size:12px; line-height:1.5; }
-</style>
-
 <script>
-const selectAll = document.getElementById('select-all');
 const tbody = document.getElementById('loads-tbody');
+const selectAll = document.getElementById('select-all');
 const batchBtn = document.getElementById('btn-batch');
 const batchCount = document.getElementById('batch-count');
 const rowCount = document.getElementById('row-count');
 
-function checkedRows() {
-  return [...tbody.querySelectorAll('.row-check:checked')];
-}
+// Row click → detail (but ignore clicks on checkbox)
+tbody.addEventListener('click', e => {
+  if (e.target.matches('input,button,a')) return;
+  const tr = e.target.closest('tr');
+  if (tr && tr.dataset.fb) location.href = '/loads/' + encodeURIComponent(tr.dataset.fb);
+});
 
-function refreshBatchButton() {
-  const n = checkedRows().length;
+function checked() { return [...tbody.querySelectorAll('.row-check:checked')]; }
+function refreshBatch() {
+  const n = checked().length;
   batchCount.textContent = n ? `(${n})` : '';
   batchBtn.disabled = n === 0;
 }
-
 selectAll.addEventListener('change', () => {
   tbody.querySelectorAll('.row-check').forEach(c => {
     if (!c.disabled && c.closest('tr').style.display !== 'none') c.checked = selectAll.checked;
   });
-  refreshBatchButton();
+  refreshBatch();
 });
+tbody.addEventListener('change', e => { if (e.target.matches('.row-check')) refreshBatch(); });
 
-tbody.addEventListener('change', e => {
-  if (e.target.matches('.row-check')) refreshBatchButton();
-});
-
-// Filter logic
-const filters = ['search','filter-status','filter-carrier','filter-port'];
-filters.forEach(id => document.getElementById(id).addEventListener('input', applyFilters));
-
+// Filters
+['search','filter-status','filter-carrier','filter-port'].forEach(id =>
+  document.getElementById(id).addEventListener('input', applyFilters));
 function applyFilters() {
-  const search = document.getElementById('search').value.toLowerCase();
-  const status = document.getElementById('filter-status').value;
-  const carrier = document.getElementById('filter-carrier').value;
-  const port = document.getElementById('filter-port').value;
-  let visible = 0;
+  const s = document.getElementById('search').value.toLowerCase();
+  const st = document.getElementById('filter-status').value;
+  const c = document.getElementById('filter-carrier').value;
+  const p = document.getElementById('filter-port').value;
+  let v = 0;
   tbody.querySelectorAll('tr').forEach(tr => {
-    const matchS = !search || tr.dataset.search.toLowerCase().includes(search);
-    const matchSt = !status || tr.dataset.status === status;
-    const matchC = !carrier || tr.dataset.carrier === carrier;
-    const matchP = !port || tr.dataset.origin === port;
-    const show = matchS && matchSt && matchC && matchP;
+    const show = (!s || tr.dataset.search.toLowerCase().includes(s))
+              && (!st || tr.dataset.status === st)
+              && (!c || tr.dataset.carrier === c)
+              && (!p || tr.dataset.origin === p);
     tr.style.display = show ? '' : 'none';
-    if (show) visible++;
+    if (show) v++;
   });
-  rowCount.textContent = `${visible} of {{ loads|length }} loads`;
+  rowCount.textContent = `${v} of {{ loads|length }} loads`;
 }
 
 // Sortable columns
-let sortState = {col: null, dir: 1};
-document.querySelectorAll('th[data-sort]').forEach(th => {
-  th.style.cursor = 'pointer';
+let sortDir = {};
+document.querySelectorAll('th[data-sort]').forEach((th, idx) => {
   th.addEventListener('click', () => {
-    const col = th.dataset.sort;
-    sortState.dir = sortState.col === col ? -sortState.dir : 1;
-    sortState.col = col;
+    const colIdx = [...th.parentNode.children].indexOf(th);
+    sortDir[colIdx] = (sortDir[colIdx] || 1) * -1;
     const rows = [...tbody.querySelectorAll('tr')];
-    rows.sort((a, b) => {
-      const ka = (a.querySelector(`td:nth-child(${[...th.parentNode.children].indexOf(th)+1})`).textContent || '').trim();
-      const kb = (b.querySelector(`td:nth-child(${[...th.parentNode.children].indexOf(th)+1})`).textContent || '').trim();
-      return ka.localeCompare(kb) * sortState.dir;
+    rows.sort((a,b) => {
+      const ka = (a.children[colIdx]?.textContent || '').trim();
+      const kb = (b.children[colIdx]?.textContent || '').trim();
+      return ka.localeCompare(kb) * sortDir[colIdx];
     });
     rows.forEach(r => tbody.appendChild(r));
   });
@@ -174,57 +148,61 @@ document.querySelectorAll('th[data-sort]').forEach(th => {
 
 // Pre-Arrival Forecast
 document.getElementById('btn-prearrival').addEventListener('click', async () => {
-  const res = await fetch('/api/loads/prearrival-forecast');
-  const data = await res.json();
-  showEmailModal('Pre-Arrival Forecast — emails grouped by carrier', data.emails);
+  showEmailModal('Pre-Arrival Forecast — emails grouped by carrier', null, 'Loading…');
+  try {
+    const res = await fetch('/api/loads/prearrival-forecast');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    showEmailModal('Pre-Arrival Forecast — emails grouped by carrier', data.emails);
+  } catch (e) {
+    showEmailModal('Pre-Arrival Forecast', null, `Error: ${e.message}`);
+  }
 });
 
 // Batch Dispatch
 batchBtn.addEventListener('click', async () => {
-  const load_ids = checkedRows().map(c => c.closest('tr').dataset.fb);
-  const res = await fetch('/api/loads/dispatch', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({load_ids})
-  });
-  const data = await res.json();
-  showEmailModal(`Batch Dispatch Instruction — ${load_ids.length} loads`, data.emails);
+  const load_ids = checked().map(c => c.closest('tr').dataset.fb);
+  if (!load_ids.length) return;
+  showEmailModal(`Batch Dispatch — ${load_ids.length} loads`, null, 'Drafting…');
+  try {
+    const res = await fetch('/api/loads/dispatch', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({load_ids})
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    showEmailModal(`Batch Dispatch — ${load_ids.length} loads`, data.emails);
+  } catch (e) {
+    showEmailModal('Batch Dispatch', null, `Error: ${e.message}`);
+  }
 });
 
-function showEmailModal(title, emails) {
+function showEmailModal(title, emails, status) {
   document.getElementById('modal-title').textContent = title;
   const body = document.getElementById('modal-body');
+  if (status) { body.innerHTML = `<em>${status}</em>`; document.getElementById('email-modal').style.display='flex'; return; }
   if (!emails || !emails.length) {
-    body.innerHTML = '<p style="color:#64748B;">No emails generated.</p>';
+    body.innerHTML = '<em>No emails generated.</em>';
   } else {
     body.innerHTML = emails.map(e => `
       <div class="email-block">
-        <div class="eh">To</div><div class="ev mono">${escapeHTML(e.to)}</div>
-        <div class="eh">Subject</div><div class="ev">${escapeHTML(e.subject)}</div>
+        <div class="eh">To</div><div class="ev mono">${esc(e.to)}</div>
+        <div class="eh">Subject</div><div class="ev">${esc(e.subject)}</div>
         <div class="eh">Body</div>
-        <pre>${escapeHTML(e.body)}</pre>
-      </div>
-    `).join('');
-  }
-  // Wire Gmail / Outlook buttons to the FIRST email
-  const first = emails && emails[0];
-  if (first) {
-    const enc = (s) => encodeURIComponent(s);
+        <pre>${esc(e.body)}</pre>
+      </div>`).join('');
+    const first = emails[0];
     document.getElementById('modal-gmail').onclick = () => {
+      const enc = encodeURIComponent;
       window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=${enc(first.to)}&su=${enc(first.subject)}&body=${enc(first.body)}`, '_blank');
     };
     document.getElementById('modal-outlook').onclick = () => {
-      window.location = `mailto:${enc(first.to)}?subject=${enc(first.subject)}&body=${enc(first.body)}`;
+      window.location = `mailto:${encodeURIComponent(first.to)}?subject=${encodeURIComponent(first.subject)}&body=${encodeURIComponent(first.body)}`;
     };
   }
   document.getElementById('email-modal').style.display = 'flex';
 }
-
-function closeModal() {
-  document.getElementById('email-modal').style.display = 'none';
-}
-
-function escapeHTML(s) {
-  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
+function closeModal() { document.getElementById('email-modal').style.display = 'none'; }
+function esc(s) { return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 </script>
 {% endblock %}
