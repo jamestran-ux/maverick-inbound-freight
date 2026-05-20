@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Maverick · Inbound freight, in your control</title>
+<meta name="description" content="Internal logistics tool prototype — NewAge Products">
+<meta name="viewport" content="width=1280">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand-block">
+      <div class="brand-row">
+        <div class="brand-mark"></div>
+        <div>
+          <div class="brand-name">Maverick</div>
+        </div>
+      </div>
+      <div class="brand-tag">Inbound freight, in your control</div>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="sidebar-footer">
+      NewAge Products<br>
+      Inbound Logistics · Week 21, 2026
+    </div>
+  </aside>
+
+  <section class="main">
+    <header class="topbar">
+      <div class="crumbs" id="crumbs"></div>
+      <div class="top-actions">
+        <button class="sso-btn" title="Single sign-on — mock for demo" onclick="toast('SSO is mocked in this prototype. Production: Okta + Microsoft Entra ID.')"><span class="sso-dot"></span> SSO · <a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="cda7aca0a8bee3b9bfaca38da3a8baacaaa8bdbfa2a9b8aeb9bee3aea2a0">[email&#160;protected]</a></button>
+        <div class="search">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          <input placeholder="Search loads, containers, invoices, POs…" id="globalSearch">
+          <span class="kbd">⌘K</span>
+        </div>
+        <div class="bell" title="10 audit findings">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="1.6"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9z"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
+          <span class="bell-dot">10</span>
+        </div>
+        <div class="avatar" title="James Tran · Inbound Freight Manager">JT</div>
+      </div>
+    </header>
+    <div class="content" id="content"></div>
+  </section>
+</div>
+
+<div id="modal-root"></div>
+<div id="drawer-root"></div>
+
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+<script src="screens.js"></script>
+<script src="screens2.js"></script>
+</body>
+</html>

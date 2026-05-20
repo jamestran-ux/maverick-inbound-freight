@@ -1,11 +1,12 @@
 """Maverick — Flask backend.
 
-Boots, auto-seeds, serves all the API endpoints + a minimal browser UI so the
-user can verify validation and recommendation end-to-end.
+Boots, auto-seeds, serves the polished v5 prototype at / and the real backend
+API at /api/*. The Jinja templates (/admin/*) remain available for inspection
+of the real-data version.
 """
 import os
 import json
-from flask import Flask, request, jsonify, render_template, redirect, url_for, abort
+from flask import Flask, request, jsonify, render_template, redirect, url_for, abort, send_from_directory
 
 from db import init_db, get_conn, is_seeded
 from seed import seed_all
@@ -16,8 +17,47 @@ from ranking import rank_carriers
 from ai import summarize_exceptions, draft_email
 
 app = Flask(__name__)
-UPLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+
+# ============================================================
+# Polished v5 prototype (Claude Design output) — served at /
+# ============================================================
+@app.route("/")
+def proto_index():
+    return send_from_directory(BASE_DIR, "prototype-v5.html")
+
+
+@app.route("/styles.css")
+def proto_css():
+    return send_from_directory(BASE_DIR, "styles.css", mimetype="text/css")
+
+
+@app.route("/app.js")
+def proto_appjs():
+    return send_from_directory(BASE_DIR, "app.js", mimetype="text/javascript")
+
+
+@app.route("/data.js")
+def proto_datajs():
+    return send_from_directory(BASE_DIR, "data.js", mimetype="text/javascript")
+
+
+@app.route("/screens.js")
+def proto_screensjs():
+    return send_from_directory(BASE_DIR, "screens.js", mimetype="text/javascript")
+
+
+@app.route("/screens2.js")
+def proto_screens2js():
+    return send_from_directory(BASE_DIR, "screens2.js", mimetype="text/javascript")
+
+
+@app.route("/workbook.json")
+def proto_workbook():
+    return send_from_directory(BASE_DIR, "workbook.json", mimetype="application/json")
 
 
 # ============================================================
@@ -37,14 +77,18 @@ def _bootstrap():
 
 
 # ============================================================
-# Pages (server-rendered)
+# Pages (server-rendered — kept at /admin/* for inspection alongside the
+# polished v5 prototype). These pages show the SAME data the polished prototype
+# shows, but with real-time backend rendering. Useful when validating that the
+# audit engine and recommendation engine are producing correct outputs.
 # ============================================================
-@app.route("/")
+@app.route("/admin")
+@app.route("/admin/dashboard")
 def dashboard():
     return render_template("dashboard.html", **_dashboard_context())
 
 
-@app.route("/loads")
+@app.route("/admin/loads")
 def loads_page():
     conn = get_conn()
     loads = [dict(r) for r in conn.execute(
@@ -53,7 +97,7 @@ def loads_page():
     return render_template("loads.html", loads=loads)
 
 
-@app.route("/loads/<fb_no>")
+@app.route("/admin/loads/<fb_no>")
 def load_detail_page(fb_no):
     conn = get_conn()
     load = conn.execute("SELECT * FROM loads WHERE fb_no = ?", (fb_no,)).fetchone()
@@ -75,7 +119,7 @@ def load_detail_page(fb_no):
                            invoice=invoice, milestones=milestones)
 
 
-@app.route("/containers")
+@app.route("/admin/containers")
 def containers_page():
     conn = get_conn()
     containers = [dict(r) for r in conn.execute(
@@ -86,7 +130,7 @@ def containers_page():
     return render_template("containers.html", containers=containers, actions=actions, kpis=kpis)
 
 
-@app.route("/containers/<container_no>")
+@app.route("/admin/containers/<container_no>")
 def container_detail_page(container_no):
     conn = get_conn()
     c = conn.execute("SELECT * FROM containers WHERE number = ?", (container_no,)).fetchone()
@@ -141,7 +185,7 @@ def _build_milestones(container, load):
     ]
 
 
-@app.route("/drayage-invoices")
+@app.route("/admin/drayage-invoices")
 def drayage_invoices_page():
     status_filter = request.args.get("status", "Pending Review")
     conn = get_conn()
@@ -161,7 +205,7 @@ def drayage_invoices_page():
                            counts=counts, status_filter=status_filter)
 
 
-@app.route("/drayage-invoices/<invoice_no>")
+@app.route("/admin/drayage-invoices/<invoice_no>")
 def drayage_invoice_detail(invoice_no):
     conn = get_conn()
     inv = conn.execute("SELECT * FROM drayage_invoices WHERE invoice_no = ?",
@@ -186,7 +230,7 @@ def drayage_invoice_detail(invoice_no):
                            exceptions=exceptions, ideal=ideal)
 
 
-@app.route("/customs-invoices")
+@app.route("/admin/customs-invoices")
 def customs_invoices_page():
     conn = get_conn()
     rows = [dict(r) for r in conn.execute("SELECT * FROM customs_invoices").fetchall()]
@@ -194,7 +238,7 @@ def customs_invoices_page():
     return render_template("customs_invoices.html", rows=rows)
 
 
-@app.route("/gl")
+@app.route("/admin/gl")
 def gl_page():
     conn = get_conn()
     period = request.args.get("period", "2026-05")
@@ -205,7 +249,7 @@ def gl_page():
     return render_template("gl.html", rows=rows, period=period)
 
 
-@app.route("/rate-card")
+@app.route("/admin/rate-card")
 def rate_card_page():
     conn = get_conn()
     rows = [dict(r) for r in conn.execute(
@@ -214,7 +258,7 @@ def rate_card_page():
     return render_template("rate_card.html", rows=rows)
 
 
-@app.route("/transfers")
+@app.route("/admin/transfers")
 def transfers_page():
     conn = get_conn()
     transfers = [dict(r) for r in conn.execute(
@@ -225,7 +269,7 @@ def transfers_page():
     return render_template("transfers.html", transfers=transfers, p4_needs=p4_needs)
 
 
-@app.route("/scorecard")
+@app.route("/admin/scorecard")
 def scorecard_page():
     conn = get_conn()
     carriers = [dict(r) for r in conn.execute(
@@ -234,7 +278,7 @@ def scorecard_page():
     return render_template("scorecard.html", carriers=carriers)
 
 
-@app.route("/users")
+@app.route("/admin/users")
 def users_page():
     conn = get_conn()
     users = [dict(r) for r in conn.execute("SELECT * FROM users").fetchall()]
