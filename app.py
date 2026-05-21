@@ -18,14 +18,20 @@ from recommender import recommend_container_actions, summary_kpis
 from ranking import rank_carriers
 from ai import summarize_exceptions, draft_email
 # Tracking provider — pluggable. `TRACKING_PROVIDER` selects which module backs
-# the /api/containers/<n>/track + /tracking routes. Default: mock (demo-safe).
-_PROVIDER = (os.environ.get("TRACKING_PROVIDER") or "mock").lower()
+# the /api/containers/<n>/track + /tracking routes.
+#   hybrid (default) — mock for the 5 demo refs, ShipsGo for unknowns when key present
+#   mock             — mock only (no ShipsGo calls, demo-safe)
+#   shipsgo          — real ShipsGo for everything (burns 1 credit per unique ref)
+#   terminal49       — real Terminal49 (requires paid read scope)
+_PROVIDER = (os.environ.get("TRACKING_PROVIDER") or "hybrid").lower()
 if _PROVIDER == "terminal49":
     import terminal49_client as _tp
 elif _PROVIDER == "shipsgo":
     import shipsgo_tracking_client as _tp
-else:
+elif _PROVIDER == "mock":
     import mock_tracking_client as _tp
+else:  # hybrid (default)
+    import hybrid_tracking_client as _tp
 
 t49_configured                       = _tp.is_configured
 t49_create_tracking_request          = _tp.create_tracking_request

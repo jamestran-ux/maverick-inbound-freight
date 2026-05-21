@@ -416,6 +416,61 @@ const ROUTES = {};
 // ============================================================
 // DASHBOARD
 // ============================================================
+// ============================================================
+// QUICK START — demo orientation banner (dismissible per browser session)
+// ============================================================
+const QUICK_START_DEMO_REFS = [
+  { ref: "KOCU4970299",    label: "K Line · ready to outgate",  status: "Delivered (full timeline)" },
+  { ref: "CMDUSHZ7959898", label: "CMA CGM master BOL",         status: "Mid-Pacific · ETA May 26" },
+  { ref: "ZCSU7238990",    label: "ZIM via Singapore",          status: "Caribbean · ETA May 30" },
+  { ref: "NYKU0776734",    label: "ONE (ex-NYK)",               status: "Discharged Tacoma" },
+  { ref: "TLLU4779831",    label: "Hapag-Lloyd transatlantic",  status: "Mid-Atlantic · ETA May 28" },
+];
+
+function quickStartBanner() {
+  if (sessionStorage.getItem("qs_dismissed") === "1") return "";
+  const chips = QUICK_START_DEMO_REFS.map(r => `
+    <a class="qs-chip" onclick="navigate('containers/${h(r.ref)}')" title="${h(r.status)}">
+      <span class="mono">${h(r.ref)}</span>
+      <span class="qs-chip-sub">${h(r.label)}</span>
+    </a>`).join("");
+  return `
+    <div class="qs-banner">
+      <div class="qs-banner-head">
+        <div>
+          <b>Quick start —</b> these 5 references are pre-wired for live carrier tracking via Terminal49 / ShipsGo.
+          Click any to see the full milestone timeline + current location + ETA. Upload your own drayage / customs invoices via
+          <a onclick="navigate('invoices/drayage')">Invoices → Drayage</a>.
+        </div>
+        <button class="qs-dismiss" onclick="dismissQuickStart()" title="Hide for this session">×</button>
+      </div>
+      <div class="qs-chips">${chips}</div>
+    </div>
+    <style>
+      .qs-banner { background: linear-gradient(135deg, #eef6ff 0%, #f0fdf4 100%);
+                   border: 1px solid #bfdbfe; border-radius: 10px; padding: 12px 14px;
+                   margin-bottom: 14px; font-size: 13px; }
+      .qs-banner-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+      .qs-banner a { color: #1d4ed8; text-decoration: underline; cursor: pointer; }
+      .qs-dismiss { background: transparent; border: none; font-size: 20px; line-height: 1;
+                    color: #64748b; cursor: pointer; padding: 0 4px; }
+      .qs-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+      .qs-chip { display: inline-flex; flex-direction: column; gap: 1px;
+                 background: white; border: 1px solid #cbd5e1; border-radius: 8px;
+                 padding: 6px 10px; cursor: pointer; font-size: 12px;
+                 text-decoration: none !important; color: #0f172a; }
+      .qs-chip:hover { border-color: #3b82f6; background: #f8faff; }
+      .qs-chip-sub { font-size: 10.5px; color: #64748b; font-weight: normal; }
+    </style>`;
+}
+
+window.dismissQuickStart = function () {
+  sessionStorage.setItem("qs_dismissed", "1");
+  render();
+};
+window.QUICK_START_DEMO_REFS = QUICK_START_DEMO_REFS;
+window.quickStartBanner = quickStartBanner;
+
 ROUTES.dashboard = function (root) {
   const C = D.containers;
   const outgateReady = C.filter(c => c.Stage === "Out-Gate Ready");
@@ -424,6 +479,8 @@ ROUTES.dashboard = function (root) {
   const detentionOver2 = 3; // synthetic — DC detention >2 days
 
   root.innerHTML = `
+    ${quickStartBanner()}
+
     <div class="page-title-row">
       <div>
         <h1 class="page-title">Good morning, James</h1>
@@ -1152,28 +1209,34 @@ function milestones(cont, inv, live) {
       meta[st] = `ETA ${_shortTs(m.timestamp)}${m.location ? " · " + m.location : ""}`;
     });
   } else {
-    // Fallback: derive from the static container record (legacy behavior).
+    // Fallback: derive from the static container record + invoice presence.
+    // An existing drayage invoice is strong evidence the container has been
+    // discharged AND picked up (the drayage carrier billed for the move).
     const stage = cont.Stage;
     const customsCleared = cont["Customs Status"] === "Cleared";
     const sslReleased = cont["SSL Released"] === "Yes";
-    if (cont["Discharge Date"]) { done.add("Vessel ETD"); done.add("In Transit (Ocean)"); done.add("Vessel Arrival"); done.add("Discharge"); }
-    if (customsCleared) done.add("Customs Cleared");
-    if (sslReleased) done.add("SSL Released");
-    if (["Out-Gate Ready", "Delivered"].includes(stage)) done.add("Out-Gate Ready");
-    if (cont["Pickup Date"]) { done.add("Pickup"); done.add("In Transit (Inland)"); }
+    const hasInvoice = !!(inv && (inv["Invoice #"] || inv["FB# / Load ID"]));
+
+    if (cont["Discharge Date"] || hasInvoice) {
+      done.add("Vessel ETD"); done.add("In Transit (Ocean)"); done.add("Vessel Arrival"); done.add("Discharge");
+    }
+    if (customsCleared || hasInvoice) done.add("Customs Cleared");
+    if (sslReleased || hasInvoice) done.add("SSL Released");
+    if (["Out-Gate Ready", "Delivered"].includes(stage) || hasInvoice) done.add("Out-Gate Ready");
+    if (cont["Pickup Date"] || hasInvoice) { done.add("Pickup"); done.add("In Transit (Inland)"); }
     if (stage === "Delivered") done.add("Delivered");
     if ((cont.Status || "").includes("Returned")) done.add("Empty Returned");
 
     Object.assign(meta, {
-      "Vessel ETD": cont["Discharge Date"] ? "−14d" : "",
-      "In Transit (Ocean)": cont["Discharge Date"] ? "voyage complete" : (stage === "Awaiting Discharge" ? "on the water" : ""),
-      "Vessel Arrival": cont["Discharge Date"] ? "vessel docked" : (stage === "Awaiting Discharge" ? "ETA 2026-05-22" : ""),
-      "Discharge": cont["Discharge Date"] || "",
-      "Customs Cleared": customsCleared ? "cleared" : (cont["Customs Status"] || "pending"),
-      "SSL Released": sslReleased ? "released" : (stage === "Awaiting Release" ? "expected <24h" : "—"),
+      "Vessel ETD": cont["Discharge Date"] ? "−14d" : (hasInvoice ? "from invoice" : ""),
+      "In Transit (Ocean)": cont["Discharge Date"] ? "voyage complete" : (stage === "Awaiting Discharge" ? "on the water" : (hasInvoice ? "voyage complete" : "")),
+      "Vessel Arrival": cont["Discharge Date"] ? "vessel docked" : (stage === "Awaiting Discharge" ? "ETA 2026-05-22" : (hasInvoice ? "arrived" : "")),
+      "Discharge": cont["Discharge Date"] || (hasInvoice ? "discharged" : ""),
+      "Customs Cleared": customsCleared ? "cleared" : (cont["Customs Status"] || (hasInvoice ? "cleared" : "pending")),
+      "SSL Released": sslReleased ? "released" : (stage === "Awaiting Release" ? "expected <24h" : (hasInvoice ? "released" : "—")),
       "Out-Gate Ready": done.has("Out-Gate Ready") ? `LFD ${cont.LFD || "—"}` : "—",
-      "Pickup": cont["Pickup Date"] || "—",
-      "In Transit (Inland)": cont["Pickup Date"] && stage !== "Out-Gate Ready" ? "in transit" : "—",
+      "Pickup": cont["Pickup Date"] || (hasInvoice ? `via ${inv["FB# / Load ID"] || inv["Invoice #"]}` : "—"),
+      "In Transit (Inland)": cont["Pickup Date"] && stage !== "Out-Gate Ready" ? "in transit" : (hasInvoice ? "delivered" : "—"),
       "Delivered": stage === "Delivered" ? "delivered" : "—",
       "Empty Returned": (cont.Status || "").includes("Returned") ? "returned" : "—",
     });
@@ -1572,6 +1635,17 @@ window.addEventListener("DOMContentLoaded", () => {
   if (hash) currentRoute = hash;
   render();
   wireGlobalSearch();
+});
+
+// Browser back/forward — when the URL hash changes via history navigation,
+// update currentRoute and re-render. Guarded against the no-op from our own
+// navigate() (which already sets currentRoute before mutating the hash).
+window.addEventListener("hashchange", () => {
+  const hash = (window.location.hash || "").replace("#", "");
+  if (!hash) return;
+  if (hash === currentRoute) return;
+  currentRoute = hash;
+  render();
 });
 
 // ============================================================

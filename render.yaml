@@ -15,4 +15,4 @@ services:
       - key: SHIPSGO_API_TOKEN
         sync: false   # set in dashboard, don't commit
       - key: TRACKING_PROVIDER
-        value: mock   # mock | terminal49 | shipsgo  — switch via dashboard, no redeploy needed
+        value: hybrid # hybrid (default) | mock | terminal49 | shipsgo — switch via dashboard, no redeploy needed

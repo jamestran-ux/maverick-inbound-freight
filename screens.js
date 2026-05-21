@@ -97,6 +97,8 @@ ROUTES.containers = function (root, sub) {
   const delivered = C.filter(c => c.Stage === "Delivered");
 
   root.innerHTML = `
+    ${typeof quickStartBanner === "function" ? quickStartBanner() : ""}
+
     <div class="page-title-row">
       <div>
         <h1 class="page-title">Containers</h1>
@@ -525,7 +527,32 @@ function customsPill(s) {
 
 function renderContainerDetail(root, containerId) {
   const c = D.containers.find(x => x["Container #"] === containerId);
-  if (!c) { root.innerHTML = `<div class="empty"><strong>Container not found</strong>${h(containerId)}</div>`; return; }
+  if (!c) {
+    const demoChips = (window.QUICK_START_DEMO_REFS || []).map(r =>
+      `<a class="qs-chip" onclick="navigate('containers/${h(r.ref)}')"><span class="mono">${h(r.ref)}</span><span class="qs-chip-sub">${h(r.label)}</span></a>`).join("");
+    root.innerHTML = `
+      <div class="row" style="margin-bottom:14px;">
+        <button class="btn secondary sm" onclick="navigate('containers')">← All containers</button>
+      </div>
+      <div class="card">
+        <div class="card-body" style="padding:20px;">
+          <h2 style="margin:0 0 8px;">Container <span class="mono">${h(containerId)}</span> isn't in this workspace</h2>
+          <div class="muted" style="font-size:13px; margin-bottom:14px;">
+            Maverick only knows about containers seeded into NewAge's mock dataset and the live-tracking demo refs.
+            To see a full container detail view, pick one of the 5 demo references below — each shows real-shape carrier
+            milestones, ETA, current location, and a linked drayage invoice.
+          </div>
+          <div class="qs-chips" style="margin-bottom:14px;">${demoChips}</div>
+          <div class="muted" style="font-size:12px;">
+            Want to track <span class="mono">${h(containerId)}</span> live? Open
+            <a onclick="navigate('containers')">Containers</a> → click any demo ref → use the
+            <b>Re-track</b> button on the Live tracking card with this number as the reference.
+            (Requires <code>TRACKING_PROVIDER=shipsgo</code> or <code>hybrid</code> + a ShipsGo API key.)
+          </div>
+        </div>
+      </div>`;
+    return;
+  }
   const inv = D.invoices.find(i => i["Container #"] === containerId);
   const po = D.pos.find(p => p["Container #"] === containerId);
   const showDispatch = c.Stage === "Out-Gate Ready" || /past LFD|missed/i.test(c.Notes || c["Demurrage Risk"] || "");

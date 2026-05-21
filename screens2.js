@@ -326,6 +326,45 @@ function _ensureContainerStub(containerNo, originHint) {
 
 // Helper: dedupe + push a drayage invoice row built from upload response.
 // Returns "added" | "replaced".
+// Build small "matched / new" chips showing what the uploaded invoice resolved
+// against in the seeded dataset. Used in the multi-file upload result row.
+function _buildMatchChips(kind, data) {
+  const chips = [];
+  const _chip = (label, value, matched) => {
+    if (!value || value === "—") return;
+    const color = matched
+      ? "background:#dcfce7;border-color:#86efac;color:#166534"
+      : "background:#fef3c7;border-color:#fcd34d;color:#92400e";
+    const tag = matched ? "matched" : "new";
+    chips.push(`<span class="mono" style="display:inline-flex;gap:4px;align-items:center;font-size:11px;padding:2px 8px;border-radius:10px;border:1px solid;${color}">
+      <span style="font-size:10px;text-transform:uppercase;letter-spacing:0.04em;font-family:inherit;">${tag}</span>
+      <span><b>${h(label)}</b> ${h(value)}</span>
+    </span>`);
+  };
+  const containerKnown = no => !!(D.containers || []).find(c => c["Container #"] === no);
+  const fbKnown = fb => !!(D.invoices || []).find(i => i["FB# / Load ID"] === fb);
+  const poKnown = po => !!(D.pos || []).find(p => p["PO #"] === po);
+
+  if (kind === 'customs') {
+    // Show unique containers and POs across all entries
+    const entries = data.entries || [];
+    const containers = Array.from(new Set(entries.map(e => e.container).filter(Boolean)));
+    const pos = Array.from(new Set(entries.map(e => e.po).filter(Boolean)));
+    containers.slice(0, 6).forEach(c => _chip("container", c, containerKnown(c)));
+    pos.slice(0, 6).forEach(p => _chip("PO", p, poKnown(p)));
+    if (data.invoice_no) _chip("entry", data.invoice_no, false); // broker invoice # is always new
+  } else {
+    // Drayage — multi-invoice Excel or single
+    const records = (data.invoices && data.invoices.length) ? data.invoices : [data];
+    records.slice(0, 6).forEach(rec => {
+      if (rec.container_no) _chip("container", rec.container_no, containerKnown(rec.container_no));
+      if (rec.fb_no) _chip("FB#", rec.fb_no, fbKnown(rec.fb_no));
+      if (rec.bol) _chip("BOL", rec.bol, false);
+    });
+  }
+  return chips.join("");
+}
+
 function _upsertDrayage(inv) {
   _ensureContainerStub(inv["Container #"], inv.Origin);
   const idx = (D.invoices || []).findIndex(x => x["Invoice #"] === inv["Invoice #"]);
@@ -526,8 +565,15 @@ window.uploadInvoice = async function (kind, endpoint) {
         : (data.invoices?.length > 1
             ? `${data.invoices.length} invoices`
             : (data.invoice_no || data.entry_no || file.name));
+
+      // Build match-back chips so user can see which container / FB# / PO got
+      // matched against existing records in the dataset.
+      const matchChips = _buildMatchChips(kind, data);
+
       rowDiv.style.background = '#E1F5EE'; rowDiv.style.color = '#085041';
-      rowDiv.innerHTML = `<strong>✓ ${refLabel}</strong> · ${data.carrier_name || data.broker || ''} · ${findings} finding${findings === 1 ? '' : 's'} · ${data.status || (findings ? 'Pending Review' : 'Complete')}${data.grand_total ? ` · $${(data.grand_total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}` : ''}${dupNote}`;
+      rowDiv.innerHTML = `
+        <div><strong>✓ ${refLabel}</strong> · ${data.carrier_name || data.broker || ''} · ${findings} finding${findings === 1 ? '' : 's'} · ${data.status || (findings ? 'Pending Review' : 'Complete')}${data.grand_total ? ` · $${(data.grand_total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}` : ''}${dupNote}</div>
+        ${matchChips ? `<div style="margin-top:6px; display:flex; flex-wrap:wrap; gap:6px;">${matchChips}</div>` : ''}`;
     } catch (e) {
       failed += 1;
       rowDiv.style.background = '#FCEBEB'; rowDiv.style.color = '#791F1F';
@@ -622,9 +668,9 @@ function renderDrayageDetail(root, invId) {
           </table>
         </div>
         <div style="padding: 12px 16px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px;">
-          <button class="btn secondary">Reject</button>
+          <button class="btn secondary" onclick="rejectInvoice('${h(inv["Invoice #"])}')">Reject</button>
           ${finding ? `<button class="btn secondary" onclick="openDispute('${h(inv["Invoice #"])}')">Send dispute</button>` : ""}
-          <button class="btn">Approve invoice</button>
+          <button class="btn" onclick="approveInvoice('${h(inv["Invoice #"])}')">Approve invoice</button>
         </div>
       </div>
 
@@ -685,6 +731,49 @@ function compareToRate(line, best) {
 }
 
 // ---- Dispute drawer (Gmail / Outlook compatible) ----
+window.approveInvoice = async function (invId) {
+  const inv = D.invoices.find(i => i["Invoice #"] === invId);
+  if (!inv) { toast(`Invoice ${invId} not found.`); return; }
+  if (!confirm(`Approve invoice ${invId} for ${fmt$(inv["Grand Total (USD)"])}?\n\nThis will mark it for payment in this week's batch.`)) return;
+  try {
+    const r = await fetch(`/api/drayage-invoices/${encodeURIComponent(invId)}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    // Mutate local in-memory record so the UI reflects it immediately
+    inv.Status = "APPROVED";
+    delete auditByInv[invId];  // clear any audit finding for this invoice
+    toast(`✓ Invoice ${invId} approved · ${fmt$(inv["Grand Total (USD)"])} queued for payment`);
+    navigate("invoices/drayage");
+  } catch (e) {
+    toast(`Approval failed: ${e.message || e}`);
+  }
+};
+
+window.rejectInvoice = async function (invId) {
+  const inv = D.invoices.find(i => i["Invoice #"] === invId);
+  if (!inv) { toast(`Invoice ${invId} not found.`); return; }
+  const reason = prompt(`Reject invoice ${invId}?\n\nReason (will be logged + sent to carrier AR):`,
+                        "Rate variance — see audit finding");
+  if (reason === null || reason === "") return;
+  try {
+    const r = await fetch(`/api/drayage-invoices/${encodeURIComponent(invId)}/reject`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    inv.Status = "IN DISPUTE";
+    toast(`Invoice ${invId} rejected → in dispute · reason logged`);
+    navigate("invoices/drayage");
+  } catch (e) {
+    toast(`Reject failed: ${e.message || e}`);
+  }
+};
+
 window.openDispute = function (invId) {
   const inv = D.invoices.find(i => i["Invoice #"] === invId);
   const f = auditByInv[invId];
@@ -965,11 +1054,25 @@ function renderCustomsDetail(root) {
 // GL RECONCILIATION  (route: invoices/gl)
 // ============================================================
 function renderGLRecon(root) {
+  // Derive from live data — sums update as invoices are uploaded / approved /
+  // rejected, so the GL recon stays in sync with what's actually in the system.
+  const drayage = D.invoices || [];
+  const customs = (D.customs && D.customs.entries) || [];
+
+  const freightActual = drayage.reduce((s, i) => s + (Number(i["Grand Total (USD)"]) || 0), 0);
+  const freightAccrued = freightActual * 0.985 + Math.round((freightActual % 100));  // synthetic 1.5% accrual gap
+  const dutyActual = customs.reduce((s, e) => s + (Number(e.duty) || 0), 0);
+  const brokerageActual = customs.reduce((s, e) => s + (Number(e.brokerage) || 0), 0)
+                       || (customs.length * 125);  // fallback flat fee
+  const demurrageActual = drayage.filter(i =>
+    /demurrage/i.test(i["Audit Finding"] || "") || /demurrage/i.test((auditByInv[i["Invoice #"]] || {})["Rule Family"] || "")
+  ).reduce((s, i) => s + (Number(i["Grand Total (USD)"]) || 0), 0) || 375.00;
+
   const rows = [
-    { account: "5210", name: "Freight-Inbound", accrued: 38847.14, actual: 39120.00, status: "Open" },
-    { account: "5215", name: "Duty (Section 301/232)", accrued: 85404.00, actual: 85404.00, status: "Posted" },
-    { account: "5220", name: "Brokerage", accrued: 750.00, actual: 750.00, status: "Posted" },
-    { account: "5225", name: "Demurrage / Detention", accrued: 0, actual: 375.00, status: "Open" },
+    { account: "5210", name: "Freight-Inbound",        accrued: freightAccrued, actual: freightActual, status: "Open" },
+    { account: "5215", name: "Duty (Sec 301/232)",      accrued: dutyActual,     actual: dutyActual,    status: "Posted" },
+    { account: "5220", name: "Brokerage",               accrued: brokerageActual, actual: brokerageActual, status: "Posted" },
+    { account: "5225", name: "Demurrage / Detention",   accrued: 0,              actual: demurrageActual, status: "Open" },
   ];
 
   root.innerHTML = `
@@ -1063,11 +1166,31 @@ RefDate,Memo,LineNum,AccountCode,Debit,Credit,CostCode
 }
 
 window.openGLLines = function (acct) {
+  const drayage = D.invoices || [];
+  const customs = (D.customs && D.customs.entries) || [];
   const map = {
-    "5210": D.invoices.slice(0, 12).map(i => ({ src: i["Invoice #"], desc: i["FB# / Load ID"] + " · " + i.Carrier, amt: i["Grand Total (USD)"] })),
-    "5215": D.customs.entries.map(e => ({ src: e.entry, desc: "Duty · " + e.notes, amt: e.duty })),
-    "5220": [{ src: "LI-US-2026-W21-3318", desc: "Brokerage (6 entries × $125)", amt: 750 }],
-    "5225": [{ src: "PCD-INV-50025", desc: "ONEU0091872 demurrage (2 days × $187.50)", amt: 375 }],
+    "5210": drayage.map(i => ({
+      src: i["Invoice #"],
+      desc: (i["FB# / Load ID"] || "—") + " · " + (i["Container #"] || "—") + " · " + i.Carrier,
+      amt: Number(i["Grand Total (USD)"]) || 0,
+    })),
+    "5215": customs.map(e => ({
+      src: e.entry,
+      desc: "Duty · " + (e.container ? `container ${e.container}` : (e.notes || "—")),
+      amt: Number(e.duty) || 0,
+    })),
+    "5220": [{
+      src: "LI-US-2026-W21-3318",
+      desc: `Brokerage (${customs.length} entries × $125)`,
+      amt: customs.length * 125,
+    }],
+    "5225": drayage
+      .filter(i => /demurrage/i.test(i["Audit Finding"] || "") || /demurrage/i.test((auditByInv[i["Invoice #"]] || {})["Rule Family"] || ""))
+      .map(i => ({
+        src: i["Invoice #"],
+        desc: `${i["Container #"]} demurrage · ${i["FB# / Load ID"]}`,
+        amt: Number(i["Grand Total (USD)"]) || 0,
+      })),
   };
   const rows = map[acct] || [];
   openModal(el("div", { class: "modal" }, [
