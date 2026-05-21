@@ -264,3 +264,21 @@ CREATE TABLE IF NOT EXISTS users (
   role TEXT,
   last_login TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS container_tracking (
+  container_no TEXT PRIMARY KEY,
+  scac TEXT,
+  request_type TEXT,
+  request_number TEXT,
+  tracking_request_id TEXT,
+  shipment_id TEXT,
+  status TEXT,
+  pod_eta TEXT,
+  pod_name TEXT,
+  last_event TEXT,
+  last_event_at TEXT,
+  raw_json TEXT,
+  error TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

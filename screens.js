@@ -57,6 +57,17 @@ const V5_PIPELINE = [
     vessel: "YM WONDROUS",   port: "Los Angeles, CA",eta: "2026-05-19", equip: "40HC", po: "NA-PO-68303", note: "Doc hold — broker chasing PO match." },
   { container: "HMMU7714203", stage: "Awaiting Release",   ssl: "HMM",
     vessel: "HMM ALGECIRAS", port: "Los Angeles, CA",eta: "2026-05-18", equip: "40HC", po: "NA-PO-68304", note: "SSL hold — expected released &lt;24h." },
+  // Demo references that resolve via live Terminal49 tracking
+  { container: "CMDUSHZ7959898", stage: "Awaiting Discharge", ssl: "CMA CGM",
+    vessel: "(live · T49)",  port: "Shanghai → LGB",  eta: "live",  equip: "40HC", po: "—", note: "<b>Demo · live Terminal49</b> — CMA CGM master BOL." },
+  { container: "TLLU4779831", stage: "Awaiting Discharge",  ssl: "—",
+    vessel: "(live · T49)",  port: "—",               eta: "live",  equip: "40HC", po: "—", note: "<b>Demo · live Terminal49</b> — TLLU container." },
+  { container: "ZCSU7238990", stage: "Awaiting Discharge",  ssl: "ZIM",
+    vessel: "(live · T49)",  port: "—",               eta: "live",  equip: "40HC", po: "—", note: "<b>Demo · live Terminal49</b> — ZIM container." },
+  { container: "NYKU0776734", stage: "Awaiting Discharge",  ssl: "ONE",
+    vessel: "(live · T49)",  port: "—",               eta: "live",  equip: "40HC", po: "—", note: "<b>Demo · live Terminal49</b> — NYK (now ONE) ref." },
+  { container: "KOCU4970299", stage: "Awaiting Discharge",  ssl: "K Line",
+    vessel: "(live · T49)",  port: "—",               eta: "live",  equip: "40HC", po: "—", note: "<b>Demo · live Terminal49</b> — K Line ref." },
 ];
 
 // Status helpers for the Container Status column (Loaded / Empty / Returned)
@@ -91,6 +102,9 @@ ROUTES.containers = function (root, sub) {
         <h1 class="page-title">Containers</h1>
         <div class="page-subtitle">Asset-centric view · demurrage at the port &amp; detention at the DC · refreshes on every EDI 315 / 322 event.</div>
       </div>
+      <div>
+        <input class="txt" id="contSearch" placeholder="Search container # / MBL / vessel…" value="${h((window.CONT_FILTERS && CONT_FILTERS.search) || "")}" style="width: 280px;">
+      </div>
     </div>
 
     <div class="kpi-grid" style="grid-template-columns: repeat(4, 1fr);">
@@ -122,7 +136,34 @@ ROUTES.containers = function (root, sub) {
       <button class="refresh-btn" onclick="refreshContainers()">↻ Refresh</button>
     </div>
   `;
+
+  // Wire container-page search (debounced; mirrors to global topbar input)
+  const csi = document.getElementById("contSearch");
+  if (csi) {
+    csi.addEventListener("input", () => {
+      window.CONT_FILTERS.search = csi.value;
+      const gs = document.getElementById("globalSearch");
+      if (gs && gs.value !== csi.value) gs.value = csi.value;
+      clearTimeout(window.__contSearchTimer);
+      window.__contSearchTimer = setTimeout(() => {
+        render();
+        const ne = document.getElementById("contSearch");
+        if (ne) { ne.focus(); ne.setSelectionRange(ne.value.length, ne.value.length); }
+      }, 180);
+    });
+  }
 };
+
+function _contSearchMatch(s, q) {
+  if (!q) return true;
+  q = q.toLowerCase();
+  return (s || "").toString().toLowerCase().includes(q);
+}
+function _contRowMatchesSearch(r, q) {
+  return _contSearchMatch(r.container, q) || _contSearchMatch(r.ssl, q) ||
+         _contSearchMatch(r.loc, q) || _contSearchMatch(r.port, q) ||
+         _contSearchMatch(r.vessel, q);
+}
 
 window.refreshContainers = function () {
   CONT_LAST_REFRESH = new Date();
@@ -146,6 +187,7 @@ function kpiTileV5(tone, label, value, sub) {
 // PANEL 1 — Past LFD / Detention Accruing (CRITICAL — top of page)
 // =================================================================
 function panel1Html() {
+  const q = (window.CONT_FILTERS && CONT_FILTERS.search) || "";
   // Build unified rows, sort by $ exposure desc
   const portRows = V5_PORT_PAST_LFD.map(r => ({
     kind: "port",
@@ -161,7 +203,9 @@ function panel1Html() {
     days: `${r.daysDet}d detention`, accrued: r.accrued,
     action: r.action, btn: "Send Return",
   }));
-  const all = [...portRows, ...dcRows].sort((a, b) => b.accrued - a.accrued);
+  let all = [...portRows, ...dcRows].sort((a, b) => b.accrued - a.accrued);
+  if (q) all = all.filter(r => _contRowMatchesSearch(r, q));
+  if (q && all.length === 0) return "";
   const total = all.reduce((s, r) => s + r.accrued, 0);
 
   return `
@@ -211,7 +255,10 @@ function panel1Html() {
 // PANEL 2 — Recommended Actions — Out-Gate Ready (safe LFD)
 // =================================================================
 function panel2Html() {
-  const rows = V5_OGR_SAFE;
+  const q = (window.CONT_FILTERS && CONT_FILTERS.search) || "";
+  let rows = V5_OGR_SAFE;
+  if (q) rows = rows.filter(r => _contRowMatchesSearch(r, q));
+  if (q && rows.length === 0) return "";
   return `
     <div class="card" style="margin-bottom: 14px;">
       <div class="card-head">
@@ -258,7 +305,10 @@ function panel2Html() {
 // PANEL 3 — Pre-Arrival Pipeline (monitoring only)
 // =================================================================
 function panel3Html() {
-  const rows = V5_PIPELINE;
+  const q = (window.CONT_FILTERS && CONT_FILTERS.search) || "";
+  let rows = V5_PIPELINE;
+  if (q) rows = rows.filter(r => _contRowMatchesSearch(r, q));
+  if (q && rows.length === 0) return "";
   const groups = {
     "Awaiting Discharge": rows.filter(r => r.stage === "Awaiting Discharge"),
     "In Customs":         rows.filter(r => r.stage === "In Customs"),
@@ -317,7 +367,10 @@ function panel4Html(delivered) {
     cstatus: containerStatusOf(c), loc: "NewAge Perris CA",
     lfd: c.LFD || "—", pickup: c["Pickup Date"] || "—",
   }));
-  const all = [...synthReturned, ...deliveredRows];
+  const q = (window.CONT_FILTERS && CONT_FILTERS.search) || "";
+  let all = [...synthReturned, ...deliveredRows];
+  if (q) all = all.filter(r => _contRowMatchesSearch(r, q));
+  if (q && all.length === 0) return "";
 
   return `
     <div class="card" style="margin-bottom: 0;">
@@ -481,9 +534,9 @@ function renderContainerDetail(root, containerId) {
   root.innerHTML = `
     <div class="row" style="margin-bottom:14px; justify-content: space-between;">
       <button class="btn secondary sm" onclick="navigate('containers')">← All containers</button>
-      <div class="edi-note" title="In production, container milestones are hydrated via project44 or Terminal49 webhooks (EDI 315 status, EDI 322 terminal events).">
+      <div class="edi-note" title="Seeded EDI 315/322 timeline + live Terminal49 tracking below.">
         <span class="dot"></span>
-        <span><b>Data source:</b> seeded EDI 315 / 322 events · production wires via <b>project44 / Terminal49</b></span>
+        <span><b>Data source:</b> seeded EDI 315 / 322 events · <b>live Terminal49 tracking</b> in card below</span>
       </div>
     </div>
 
@@ -504,9 +557,21 @@ function renderContainerDetail(root, containerId) {
     </div>
 
     <div class="detail-grid">
-      <div class="card">
-        <div class="card-head"><div class="card-title">Milestone timeline</div></div>
-        <div class="card-body">${milestones(c, inv || {})}</div>
+      <div class="stack">
+        <div class="card">
+          <div class="card-head"><div class="card-title">Milestone timeline</div></div>
+          <div class="card-body">${milestones(c, inv || {})}</div>
+        </div>
+
+        <div class="card" id="t49-card">
+          <div class="card-head">
+            <div class="card-title">Live tracking · Terminal49</div>
+            <button class="btn secondary sm" id="t49-refresh-btn" onclick="loadT49Card('${h(c["Container #"])}')">Refresh</button>
+          </div>
+          <div class="card-body" id="t49-body">
+            <div class="muted" style="font-size: 12.5px;">Loading…</div>
+          </div>
+        </div>
       </div>
 
       <div class="stack">
@@ -560,6 +625,8 @@ function renderContainerDetail(root, containerId) {
       </div>
     </div>
   `;
+
+  loadT49Card(c["Container #"]);
 }
 
 function dispatchSuggestion(c) {
@@ -1067,3 +1134,243 @@ window.kpiTile2 = kpiTile2;
 window.riskPill = riskPill;
 window.customsPill = customsPill;
 window.stateBadge = stateBadge;
+
+// ============================================================
+// Terminal49 — live container tracking UI
+// ============================================================
+const T49_SCAC_OPTIONS = [
+  { code: "MAEU", label: "Maersk" },
+  { code: "MSCU", label: "MSC" },
+  { code: "HLCU", label: "Hapag-Lloyd" },
+  { code: "ONEY", label: "ONE" },
+  { code: "CMDU", label: "CMA CGM" },
+  { code: "HDMU", label: "HMM" },
+  { code: "OOLU", label: "OOCL" },
+  { code: "YMLU", label: "Yang Ming" },
+  { code: "COSU", label: "COSCO" },
+  { code: "EGLV", label: "Evergreen" },
+  { code: "ZIMU", label: "ZIM" },
+];
+
+const T49_PREFIX_TO_SCAC = {
+  MSCU: "MSCU", MSDU: "MSCU", MEDU: "MSCU",
+  MAEU: "MAEU", MSKU: "MAEU", MRKU: "MAEU", MWCU: "MAEU",
+  HLCU: "HLCU", HLBU: "HLCU", HLXU: "HLCU",
+  ONEU: "ONEY", ONEJ: "ONEY", NYKU: "ONEY", KKLU: "ONEY", KOCU: "ONEY",
+  CMAU: "CMDU", CMDU: "CMDU",
+  HMMU: "HDMU", HDMU: "HDMU",
+  OOLU: "OOLU", OOCU: "OOLU",
+  YMLU: "YMLU", YMMU: "YMLU",
+  COSU: "COSU", CBHU: "COSU",
+  EGHU: "EGLV", EGSU: "EGLV",
+  ZIMU: "ZIMU", ZCSU: "ZIMU",
+  TLLU: "",  // Triton leasing — no carrier guess; user picks
+};
+
+function _t49GuessScac(ref) {
+  const p = (ref || "").substring(0, 4).toUpperCase();
+  return T49_PREFIX_TO_SCAC[p] || "";
+}
+
+// Returns { request_type, scac, ready } — `ready` means we can auto-fire
+// without prompting the user (both request_type and scac are confident).
+function _t49InferTracking(ref) {
+  const v = (ref || "").trim().toUpperCase();
+  const isContainer = /^[A-Z]{4}\d{7}$/.test(v);
+  const scac = _t49GuessScac(v);
+  return {
+    request_type: isContainer ? "container" : "bill_of_lading",
+    scac,
+    ready: !!scac,
+  };
+}
+
+const T49_POLL_STATES = new Set(["created", "pending", "awaiting_manifest", "tracking_warning"]);
+
+async function loadT49Card(containerNo) {
+  const body = document.getElementById("t49-body");
+  if (!body) return;
+  try {
+    const resp = await fetch(`/api/containers/${encodeURIComponent(containerNo)}/tracking`);
+    const data = await resp.json();
+    renderT49State(containerNo, data);
+  } catch (e) {
+    body.innerHTML = `<div class="pill bad">Tracking error</div>
+      <div style="font-size:12.5px; margin-top:6px;">${h(String(e && e.message || e))}</div>`;
+  }
+}
+
+function renderT49State(containerNo, data) {
+  const body = document.getElementById("t49-body");
+  if (!body) return;
+
+  if (data && data.t49_configured === false) {
+    body.innerHTML = `
+      <div class="pill warn" style="margin-bottom:8px;">Not configured</div>
+      <div class="muted" style="font-size:12.5px;">Server is missing the <code>TERMINAL49_API_TOKEN</code> env var. Set it in Render dashboard and redeploy.</div>`;
+    return;
+  }
+
+  if (!data || data.status === "not_tracked") {
+    const inferred = _t49InferTracking(containerNo);
+    // Auto-fire tracking when we can infer SCAC + type confidently
+    if (inferred.ready && data && data.t49_configured) {
+      body.innerHTML = `<div class="muted" style="font-size:12.5px;">Submitting to Terminal49 (${h(inferred.scac)} · ${h(inferred.request_type)})…</div>`;
+      startT49Tracking(containerNo, { scac: inferred.scac, request_type: inferred.request_type, request_number: containerNo, silent: true });
+      return;
+    }
+    const opts = T49_SCAC_OPTIONS.map(o =>
+      `<option value="${h(o.code)}" ${o.code === inferred.scac ? "selected" : ""}>${h(o.code)} — ${h(o.label)}</option>`
+    ).join("");
+    body.innerHTML = `
+      <div class="muted" style="font-size:12.5px; margin-bottom:10px;">
+        No live tracking yet. Submit to Terminal49 to pull real ocean carrier milestones.
+      </div>
+      <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end;">
+        <label style="display:flex; flex-direction:column; font-size:11.5px; color:#666;">Carrier (SCAC)
+          <select id="t49-scac" style="margin-top:2px;">${opts}</select>
+        </label>
+        <label style="display:flex; flex-direction:column; font-size:11.5px; color:#666;">Reference type
+          <select id="t49-type" style="margin-top:2px;">
+            <option value="container" ${inferred.request_type === "container" ? "selected" : ""}>Container #</option>
+            <option value="bill_of_lading" ${inferred.request_type === "bill_of_lading" ? "selected" : ""}>Master BOL</option>
+            <option value="booking_number">Booking #</option>
+          </select>
+        </label>
+        <label style="display:flex; flex-direction:column; font-size:11.5px; color:#666;">Reference value
+          <input id="t49-number" type="text" value="${h(containerNo)}" style="margin-top:2px; width:180px;">
+        </label>
+        <button class="btn sm" onclick="startT49Tracking('${h(containerNo)}')">Start tracking</button>
+      </div>`;
+    return;
+  }
+
+  if (data.status === "duplicate_read_blocked") {
+    body.innerHTML = `
+      <div class="pill warn" style="margin-bottom:8px;">Token scope</div>
+      <div style="font-size:12.5px; margin-bottom:6px;">Terminal49 confirms this reference is already being tracked, but the API token lacks <b>read scope</b>, so milestones cannot be fetched.</div>
+      <div class="muted" style="font-size:11.5px;">Tracking request ID: <span class="mono">${h(data.tracking_request_id || "—")}</span></div>
+      <div class="muted" style="font-size:11.5px; margin-top:8px;">Fix: <a href="https://app.terminal49.com" target="_blank" rel="noopener">app.terminal49.com</a> → Developer Portal → re-issue the token with read+write scopes, then update <code>TERMINAL49_API_TOKEN</code>.</div>`;
+    return;
+  }
+
+  if (data.status === "error") {
+    body.innerHTML = `
+      <div class="pill bad" style="margin-bottom:8px;">Error</div>
+      <div style="font-size:12.5px;">${h(data.error || "Unknown error")}</div>
+      <div style="margin-top:10px;"><button class="btn secondary sm" onclick="resetT49Tracking('${h(containerNo)}')">Try again</button></div>`;
+    return;
+  }
+
+  const pending = T49_POLL_STATES.has(data.status);
+  const milestones = (data.milestones || []).slice().reverse();
+  // Current event = most recent ACTUAL event (fall back to most recent of any kind)
+  const currentEvent = milestones.find(m => m.actual !== false) || milestones[0] || null;
+  const headerBg = pending ? "background:#fff7ed;border:1px solid #fed7aa;"
+                          : "background:#ecfdf5;border:1px solid #a7f3d0;";
+  body.innerHTML = `
+    <div style="padding:10px 12px; border-radius:8px; margin-bottom:10px; ${headerBg}">
+      <div class="row" style="justify-content:space-between; align-items:flex-start; gap:12px;">
+        <div style="min-width:0;">
+          <div class="muted" style="font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Current event</div>
+          <div style="font-size:14px; font-weight:600; margin-top:2px;">
+            ${h((currentEvent && currentEvent.event) || (pending ? "Awaiting carrier response…" : "—"))}
+          </div>
+          ${currentEvent && currentEvent.timestamp ? `<div class="mono" style="font-size:11.5px; color:#555;">${h(currentEvent.timestamp)}${currentEvent.actual === false ? ' <span class="pill warn" style="margin-left:4px;">est.</span>' : ""}</div>` : ""}
+        </div>
+        <div style="min-width:0;">
+          <div class="muted" style="font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Current location</div>
+          <div style="font-size:14px; font-weight:600; margin-top:2px;">${h((currentEvent && currentEvent.location) || "—")}</div>
+        </div>
+        <div style="min-width:0; text-align:right;">
+          <div class="muted" style="font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">ETA · ${h(data.pod_name || "POD")}</div>
+          <div class="mono" style="font-size:14px; font-weight:600; margin-top:2px;">${h(data.pod_eta || "—")}</div>
+        </div>
+      </div>
+    </div>
+    <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <div class="row" style="gap:6px;">
+        ${pending ? `<span class="pill warn">${h(data.status)}</span>` : `<span class="pill ok">${h(data.status)}</span>`}
+        ${data.scac ? `<span class="pill neutral mono">${h(data.scac)}</span>` : ""}
+      </div>
+      <div class="muted" style="font-size:11.5px;">
+        ${data.shipment_id ? `T49 shipment <span class="mono">${h(data.shipment_id)}</span>` : (data.tracking_request_id ? `Request <span class="mono">${h(data.tracking_request_id)}</span>` : "")}
+        ${data.updated_at ? ` · ${h(data.updated_at)}` : ""}
+      </div>
+    </div>
+    ${pending ? `<div class="muted" style="font-size:12px; margin-bottom:8px;">Polling Terminal49… milestones appear once the carrier responds (usually under a minute).</div>` : ""}
+    ${milestones.length ? `
+      <div>
+        ${milestones.map(m => `
+          <div class="row" style="justify-content:space-between; padding:6px 0; border-bottom:1px solid #eef0f2;">
+            <div>
+              <b style="font-size:12.5px;">${h(m.event || "—")}</b>
+              <span class="muted" style="font-size:11.5px; margin-left:6px;">${h(m.location || "")}</span>
+              ${m.actual === false ? `<span class="pill warn" style="margin-left:6px;">est.</span>` : ""}
+            </div>
+            <div class="mono" style="font-size:11.5px;">${h(m.timestamp || "")}</div>
+          </div>`).join("")}
+      </div>` : `<div class="muted" style="font-size:12px;">No events yet.</div>`}
+    <div style="margin-top:10px; display:flex; gap:8px;">
+      <button class="btn secondary sm" onclick="loadT49Card('${h(containerNo)}')">Refresh</button>
+      <button class="btn secondary sm" onclick="resetT49Tracking('${h(containerNo)}')">Re-track</button>
+    </div>`;
+
+  if (pending) {
+    setTimeout(() => loadT49Card(containerNo), 5000);
+  }
+}
+
+async function startT49Tracking(containerNo, opts) {
+  const body = document.getElementById("t49-body");
+  let scac, request_type, request_number, silent;
+  if (opts) {
+    scac = opts.scac; request_type = opts.request_type;
+    request_number = opts.request_number || containerNo;
+    silent = !!opts.silent;
+  } else {
+    const scacEl = document.getElementById("t49-scac");
+    const typeEl = document.getElementById("t49-type");
+    const numEl  = document.getElementById("t49-number");
+    if (!scacEl || !typeEl || !numEl) return;
+    scac = scacEl.value;
+    request_type = typeEl.value;
+    request_number = numEl.value || containerNo;
+    silent = false;
+  }
+  if (body && !silent) {
+    body.innerHTML = `<div class="muted" style="font-size:12.5px;">Submitting to Terminal49…</div>`;
+  }
+  try {
+    const resp = await fetch(`/api/containers/${encodeURIComponent(containerNo)}/track`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scac, request_type, request_number }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      if (body) {
+        body.innerHTML = `
+          <div class="pill bad" style="margin-bottom:8px;">Failed</div>
+          <div style="font-size:12.5px;">${h(data.error || ("HTTP " + resp.status))}</div>
+          <div style="margin-top:10px;"><button class="btn secondary sm" onclick="resetT49Tracking('${h(containerNo)}')">Back</button></div>`;
+      }
+      return;
+    }
+    if (!silent) toast(`Terminal49 request submitted (${data.status})`);
+    loadT49Card(containerNo);
+  } catch (e) {
+    if (body) {
+      body.innerHTML = `<div class="pill bad">Network error</div>
+        <div style="font-size:12.5px; margin-top:6px;">${h(String(e && e.message || e))}</div>`;
+    }
+  }
+}
+
+function resetT49Tracking(containerNo) {
+  renderT49State(containerNo, { t49_configured: true, status: "not_tracked", milestones: [] });
+}
+
+window.loadT49Card = loadT49Card;
+window.startT49Tracking = startT49Tracking;
+window.resetT49Tracking = resetT49Tracking;

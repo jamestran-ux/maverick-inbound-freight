@@ -2,6 +2,62 @@
 "use strict";
 
 const D = window.DATA;
+
+// ============================================================
+// Demo seeding — real ocean shipment refs that resolve via Terminal49
+// (added in-memory so they appear on the Containers / Load Visibility pages
+// alongside the seeded mock data — clicking them auto-fires T49 tracking)
+// ============================================================
+(function seedT49DemoRefs() {
+  if (!D || !D.containers) return;
+  const DEMO_REFS = [
+    { num: "CMDUSHZ7959898", line: "CMA CGM", vessel: "(live · T49)",
+      origin: "Shanghai, China",      port: "Long Beach, CA",
+      stage: "Awaiting Discharge",    risk: "LOW",
+      status: "MBL · live tracking",  note: "Demo · CMA CGM master BOL" },
+    { num: "TLLU4779831",     line: "—",        vessel: "(live · T49)",
+      origin: "—",                     port: "—",
+      stage: "Awaiting Discharge",    risk: "LOW",
+      status: "Live tracking",         note: "Demo · TLLU container" },
+    { num: "ZCSU7238990",     line: "ZIM",      vessel: "(live · T49)",
+      origin: "—",                     port: "—",
+      stage: "Awaiting Discharge",    risk: "LOW",
+      status: "Live tracking",         note: "Demo · ZIM container" },
+    { num: "NYKU0776734",     line: "ONE",      vessel: "(live · T49)",
+      origin: "—",                     port: "—",
+      stage: "Awaiting Discharge",    risk: "LOW",
+      status: "Live tracking",         note: "Demo · NYK (now ONE) ref" },
+    { num: "KOCU4970299",     line: "K Line",   vessel: "(live · T49)",
+      origin: "—",                     port: "—",
+      stage: "Awaiting Discharge",    risk: "LOW",
+      status: "Live tracking",         note: "Demo · K Line ref" },
+  ];
+  const existing = new Set(D.containers.map(c => c["Container #"]));
+  DEMO_REFS.forEach(r => {
+    if (existing.has(r.num)) return;
+    D.containers.push({
+      "Container #": r.num,
+      "Steamship Line": r.line,
+      "Vessel": r.vessel,
+      "Equipment": "40HC",
+      "Origin Port": r.origin,
+      "US Port": r.port,
+      "Discharge Date": "",
+      "Customs Status": "Pending",
+      "SSL Released": "No",
+      "LFD": "",
+      "Pickup Date": "",
+      "Free Time (days)": 7,
+      "Stage": r.stage,
+      "Demurrage Risk": r.risk,
+      "Status": r.status,
+      "Linked PO": "",
+      "Notes": r.note,
+      "_demo": true,
+    });
+  });
+})();
+
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 const el = (tag, attrs = {}, children = []) => {
@@ -780,8 +836,16 @@ ROUTES.loads = function (root, sub) {
   $("#lvCarrier").addEventListener("change", e => { LV_FILTERS.carrier = e.target.value; render(); });
   $("#lvOrigin").addEventListener("change", e => { LV_FILTERS.origin = e.target.value; render(); });
   $("#lvSearch").addEventListener("input", e => {
-    LV_FILTERS.search = e.target.value; render();
-    setTimeout(() => { $("#lvSearch") && $("#lvSearch").focus(); $("#lvSearch") && ($("#lvSearch").selectionStart = $("#lvSearch").value.length); }, 0);
+    LV_FILTERS.search = e.target.value;
+    // mirror into global search input so the topbar stays in sync
+    const gs = document.getElementById("globalSearch");
+    if (gs && gs.value !== e.target.value) gs.value = e.target.value;
+    clearTimeout(window.__lvSearchTimer);
+    window.__lvSearchTimer = setTimeout(() => {
+      render();
+      const ne = $("#lvSearch");
+      if (ne) { ne.focus(); ne.setSelectionRange(ne.value.length, ne.value.length); }
+    }, 180);
   });
   // Status checkboxes
   if (LV_STATE.showStatusPop) {
@@ -1397,7 +1461,63 @@ window.addEventListener("DOMContentLoaded", () => {
   const hash = window.location.hash.replace("#", "");
   if (hash) currentRoute = hash;
   render();
+  wireGlobalSearch();
 });
+
+// ============================================================
+// GLOBAL SEARCH — top-bar input, routes into page-level filter state
+// ============================================================
+const CONT_FILTERS = { search: "" };
+
+let _gsDebounceTimer = null;
+
+function wireGlobalSearch() {
+  const inp = document.getElementById("globalSearch");
+  if (!inp) return;
+  inp.addEventListener("input", () => {
+    const v = inp.value;
+    // Push into whichever page-level filter applies
+    if (currentRoute.startsWith("loads")) LV_FILTERS.search = v;
+    else if (currentRoute.startsWith("containers")) CONT_FILTERS.search = v;
+    // Both — keep them in sync so a search reads on both pages
+    LV_FILTERS.search = v;
+    CONT_FILTERS.search = v;
+    clearTimeout(_gsDebounceTimer);
+    _gsDebounceTimer = setTimeout(() => {
+      render();
+      const el2 = document.getElementById("globalSearch");
+      if (el2) { el2.focus(); el2.setSelectionRange(el2.value.length, el2.value.length); }
+    }, 180);
+  });
+  inp.addEventListener("keydown", e => {
+    if (e.key !== "Enter") return;
+    const v = inp.value.trim();
+    if (!v) return;
+    const hit = _gsResolveDirectHit(v);
+    if (hit) navigate(hit);
+  });
+  // ⌘K / Ctrl-K focuses search
+  document.addEventListener("keydown", e => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      const el2 = document.getElementById("globalSearch");
+      if (el2) { el2.focus(); el2.select(); }
+    }
+  });
+}
+
+function _gsResolveDirectHit(q) {
+  const v = q.toUpperCase();
+  // 1) exact container # match
+  if (D.containers && D.containers.some(c => (c["Container #"] || "").toUpperCase() === v)) return `containers/${q}`;
+  // 2) exact invoice / load ID match
+  const inv = (D.invoices || []).find(i =>
+    (i["Invoice #"] || "").toUpperCase() === v || (i["FB# / Load ID"] || "").toUpperCase() === v);
+  if (inv) return `loads/${inv["Invoice #"]}`;
+  // 3) customs entry
+  if (D.customs && D.customs.entries && D.customs.entries.some(e => (e.entry || "").toUpperCase() === v)) return "invoices/customs";
+  return null;
+}
 
 // Expose globals (so other script files & inline handlers can use)
 Object.assign(window, {

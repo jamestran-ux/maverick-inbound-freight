@@ -10,3 +10,9 @@ services:
         value: 3.11.9
       - key: ANTHROPIC_API_KEY
         sync: false   # set in dashboard, don't commit
+      - key: TERMINAL49_API_TOKEN
+        sync: false   # set in dashboard, don't commit
+      - key: SHIPSGO_API_TOKEN
+        sync: false   # set in dashboard, don't commit
+      - key: TRACKING_PROVIDER
+        value: mock   # mock | terminal49 | shipsgo  — switch via dashboard, no redeploy needed

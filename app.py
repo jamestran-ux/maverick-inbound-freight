@@ -6,6 +6,8 @@ of the real-data version.
 """
 import os
 import json
+from dotenv import load_dotenv
+load_dotenv()  # pull TERMINAL49_API_TOKEN, ANTHROPIC_API_KEY, etc. from .env in dev
 from flask import Flask, request, jsonify, render_template, redirect, url_for, abort, send_from_directory
 
 from db import init_db, get_conn, is_seeded
@@ -15,6 +17,25 @@ from audit import audit_invoice, audit_all
 from recommender import recommend_container_actions, summary_kpis
 from ranking import rank_carriers
 from ai import summarize_exceptions, draft_email
+# Tracking provider — pluggable. `TRACKING_PROVIDER` selects which module backs
+# the /api/containers/<n>/track + /tracking routes. Default: mock (demo-safe).
+_PROVIDER = (os.environ.get("TRACKING_PROVIDER") or "mock").lower()
+if _PROVIDER == "terminal49":
+    import terminal49_client as _tp
+elif _PROVIDER == "shipsgo":
+    import shipsgo_tracking_client as _tp
+else:
+    import mock_tracking_client as _tp
+
+t49_configured                       = _tp.is_configured
+t49_create_tracking_request          = _tp.create_tracking_request
+t49_get_tracking_request             = _tp.get_tracking_request
+t49_get_shipment                     = _tp.get_shipment
+t49_parse_milestones                 = _tp.parse_milestones
+t49_find_existing_tracking_request   = _tp.find_existing_tracking_request
+t49_find_shipment_by_reference       = _tp.find_shipment_by_reference
+T49Error                             = _tp.T49Error
+T49DuplicateError                    = _tp.T49DuplicateError
 
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -519,6 +540,259 @@ def api_container_action(container_no):
             "terminal": c.get("us_port", "the terminal"),
         })
     return jsonify({"email": email, "kind": kind})
+
+
+# ============================================================
+# Terminal49 — live container tracking
+# ============================================================
+def _t49_row_to_dict(row):
+    if not row:
+        return None
+    rec = dict(row)
+    rec.pop("raw_json", None)
+    return rec
+
+
+@app.route("/api/containers/<container_no>/track", methods=["POST"])
+def api_track_container(container_no):
+    """Create a Terminal49 tracking request for this container.
+
+    Body (JSON):
+      scac: 4-letter ocean carrier SCAC (e.g. 'MAEU', 'MSCU', 'ONEY'). Required.
+      request_type: 'bill_of_lading' (default) | 'container' | 'booking_number'
+      request_number: MBL / container # / booking #. Defaults to <container_no>.
+    """
+    if not t49_configured():
+        return jsonify({"error": "TERMINAL49_API_TOKEN not set on server"}), 503
+
+    body = request.get_json(silent=True) or {}
+    scac = (body.get("scac") or "").strip().upper() or None
+    request_type = body.get("request_type") or "bill_of_lading"
+    request_number = body.get("request_number") or container_no
+
+    try:
+        resp = t49_create_tracking_request(request_number, scac=scac,
+                                           request_type=request_type)
+        req = resp.get("data", {}) or {}
+    except T49DuplicateError as e:
+        # T49 returned the existing tracking_request_id in the error meta — use it directly
+        if e.request_id:
+            try:
+                tr = t49_get_tracking_request(e.request_id)
+                req = tr.get("data") or {}
+            except T49Error as e2:
+                # Token may be create-only (lacks read scope). Save what we know and surface clearly.
+                msg = str(e2)
+                read_blocked = "permissions for using the API" in msg or " 401" in msg
+                conn = get_conn()
+                try:
+                    conn.execute(
+                        """INSERT INTO container_tracking (container_no, scac, request_type, request_number,
+                              tracking_request_id, status, error, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                           ON CONFLICT(container_no) DO UPDATE SET
+                             scac=excluded.scac, request_type=excluded.request_type,
+                             request_number=excluded.request_number,
+                             tracking_request_id=excluded.tracking_request_id,
+                             status=excluded.status, error=excluded.error,
+                             updated_at=CURRENT_TIMESTAMP""",
+                        (container_no, scac, request_type, request_number, e.request_id,
+                         "duplicate_read_blocked" if read_blocked else "error", msg),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+                hint = (" Token is create-only — give it read scope at app.terminal49.com → Developer Portal."
+                        if read_blocked else "")
+                return jsonify({
+                    "container_no": container_no,
+                    "tracking_request_id": e.request_id,
+                    "status": "duplicate_read_blocked" if read_blocked else "error",
+                    "error": msg + hint,
+                }), 200 if read_blocked else 502
+        else:
+            existing = t49_find_existing_tracking_request(request_number, scac=scac)
+            if existing:
+                req = existing
+            else:
+                ship = t49_find_shipment_by_reference(request_number)
+                if ship:
+                    req = {
+                        "id": None,
+                        "attributes": {"status": "succeeded"},
+                        "relationships": {"tracked_object": {"data": {"type": "shipment", "id": ship.get("id")}}},
+                    }
+                else:
+                    return jsonify({"error": str(e)}), 502
+    except T49Error as e:
+        msg = str(e)
+        conn = get_conn()
+        try:
+            conn.execute(
+                """INSERT INTO container_tracking (container_no, scac, request_type, request_number, status, error, updated_at)
+                   VALUES (?, ?, ?, ?, 'error', ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(container_no) DO UPDATE SET
+                     scac=excluded.scac, request_type=excluded.request_type,
+                     request_number=excluded.request_number, status='error',
+                     error=excluded.error, updated_at=CURRENT_TIMESTAMP""",
+                (container_no, scac, request_type, request_number, msg),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return jsonify({"error": msg}), 502
+
+    req_id = req.get("id")
+    status = (req.get("attributes") or {}).get("status", "created")
+    # Capture inline shipment relationship if T49 already linked one (duplicate path)
+    inline_shipment_id = None
+    rels = req.get("relationships") or {}
+    for key in ("tracked_object", "shipment"):
+        rel = rels.get(key) or {}
+        sd = rel.get("data") or {}
+        if sd.get("type") == "shipment" and sd.get("id"):
+            inline_shipment_id = sd.get("id")
+            break
+
+    raw_blob = {"tracking_request": {"data": req}}
+    conn = get_conn()
+    try:
+        conn.execute(
+            """INSERT INTO container_tracking (container_no, scac, request_type, request_number,
+                  tracking_request_id, shipment_id, status, raw_json, error, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)
+               ON CONFLICT(container_no) DO UPDATE SET
+                 scac=excluded.scac,
+                 request_type=excluded.request_type,
+                 request_number=excluded.request_number,
+                 tracking_request_id=excluded.tracking_request_id,
+                 shipment_id=excluded.shipment_id,
+                 status=excluded.status,
+                 raw_json=excluded.raw_json,
+                 error=NULL,
+                 updated_at=CURRENT_TIMESTAMP""",
+            (container_no, scac, request_type, request_number, req_id,
+             inline_shipment_id, status, json.dumps(raw_blob)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return jsonify({
+        "container_no": container_no,
+        "tracking_request_id": req_id,
+        "shipment_id": inline_shipment_id,
+        "status": status,
+    })
+
+
+@app.route("/api/containers/<container_no>/tracking", methods=["GET"])
+def api_get_tracking(container_no):
+    """Return cached tracking state. If pending and we have a tracking_request_id,
+    poll T49 once: succeeded → fetch shipment, parse milestones, cache. """
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM container_tracking WHERE container_no = ?",
+            (container_no,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        return jsonify({
+            "container_no": container_no,
+            "status": "not_tracked",
+            "milestones": [],
+            "t49_configured": t49_configured(),
+        })
+
+    rec = dict(row)
+    raw_json = rec.pop("raw_json", None)
+    rec["t49_configured"] = t49_configured()
+
+    pending_states = {"created", "pending", "awaiting_manifest", "tracking_warning"}
+    needs_milestone_fetch = bool(rec.get("shipment_id")) and not rec.get("last_event_at")
+    should_poll = t49_configured() and (
+        (rec.get("status") in pending_states and rec.get("tracking_request_id"))
+        or needs_milestone_fetch
+    )
+
+    if should_poll:
+        try:
+            shipment_id = rec.get("shipment_id")
+            new_status = rec.get("status")
+            cached_blob = {}
+
+            # If we still have a tracking_request to poll, do so
+            if rec.get("tracking_request_id") and rec.get("status") in pending_states:
+                tr = t49_get_tracking_request(rec["tracking_request_id"])
+                data = (tr.get("data") or {})
+                new_status = (data.get("attributes") or {}).get("status", rec["status"])
+                cached_blob["tracking_request"] = tr
+                rels = data.get("relationships") or {}
+                for key in ("tracked_object", "shipment"):
+                    rel = rels.get(key) or {}
+                    sd = rel.get("data") or {}
+                    if sd.get("type") == "shipment" and sd.get("id"):
+                        shipment_id = sd.get("id")
+                        break
+
+            parsed = {"milestones": [], "pod_eta": None, "pod_name": None,
+                      "last_event": None, "last_event_at": None}
+
+            if shipment_id:
+                ship = t49_get_shipment(shipment_id)
+                parsed = t49_parse_milestones(ship, container_no)
+                cached_blob["shipment"] = ship
+                # If we fetched a shipment, treat status as succeeded
+                if new_status in pending_states or not new_status:
+                    new_status = "succeeded"
+
+            conn = get_conn()
+            try:
+                conn.execute(
+                    """UPDATE container_tracking SET
+                         status=?, shipment_id=?, pod_eta=?, pod_name=?,
+                         last_event=?, last_event_at=?, raw_json=?, error=NULL,
+                         updated_at=CURRENT_TIMESTAMP
+                       WHERE container_no=?""",
+                    (new_status, shipment_id, parsed["pod_eta"], parsed["pod_name"],
+                     parsed["last_event"], parsed["last_event_at"],
+                     json.dumps(cached_blob), container_no),
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT * FROM container_tracking WHERE container_no = ?",
+                    (container_no,),
+                ).fetchone()
+            finally:
+                conn.close()
+            rec = dict(row)
+            rec.pop("raw_json", None)
+            rec["milestones"] = parsed["milestones"]
+            rec["t49_configured"] = True
+        except T49Error as e:
+            rec["error"] = str(e)
+            rec["milestones"] = []
+    else:
+        # Render whatever milestones are already cached
+        rec["milestones"] = _milestones_from_cache(raw_json, container_no)
+
+    return jsonify(rec)
+
+
+def _milestones_from_cache(raw_json, container_no):
+    if not raw_json:
+        return []
+    try:
+        blob = json.loads(raw_json)
+        ship = blob.get("shipment") if isinstance(blob, dict) else None
+        if ship:
+            return t49_parse_milestones(ship, container_no)["milestones"]
+    except Exception:
+        pass
+    return []
 
 
 @app.route("/api/drayage-invoices/<invoice_no>/dispute", methods=["POST"])
