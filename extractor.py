@@ -927,12 +927,13 @@ def _extract_via_anthropic(pdf_path):
     schema = {
         "type": "object",
         "properties": {
-            "invoice_no": {"type": "string"},
-            "carrier_name": {"type": "string"},
-            "invoice_date": {"type": "string"},
-            "fb_no": {"type": "string"},
-            "container_no": {"type": "string"},
-            "bol": {"type": "string"},
+            "invoice_no": {"type": "string", "description": "Invoice number / freight bill ID at top of doc"},
+            "carrier_name": {"type": "string", "description": "Issuing carrier or broker name"},
+            "invoice_date": {"type": "string", "description": "Invoice date in YYYY-MM-DD format if possible"},
+            "fb_no": {"type": "string", "description": "FB# / Load ID / Shipment reference for the (first) shipment"},
+            "container_no": {"type": "string", "description": "ISO 6346 container number (4 letters + 7 digits) for the (first) shipment"},
+            "bol": {"type": "string", "description": "Bill of Lading / Master B/L / MBL number"},
+            "po": {"type": "string", "description": "Purchase Order number for the (first) shipment"},
             "origin": {"type": "string"},
             "destination": {"type": "string"},
             "base_rate": {"type": "number"},
@@ -945,13 +946,30 @@ def _extract_via_anthropic(pdf_path):
                 "items": {
                     "type": "object",
                     "properties": {
-                        "line_type": {"type": "string", "enum": ["SHIPMENT", "ACCESSORIAL"]},
+                        "line_type": {"type": "string", "enum": ["SHIPMENT", "ACCESSORIAL", "FSC"]},
                         "description": {"type": "string"},
                         "qty": {"type": "number"},
                         "rate": {"type": "number"},
                         "amount": {"type": "number"},
                     },
                     "required": ["line_type", "description", "qty", "rate", "amount"],
+                },
+            },
+            "shipments": {
+                "type": "array",
+                "description": "When the invoice is a freight bill covering MULTIPLE shipments (each row of an embedded shipment table is its own shipment), populate one entry per shipment. Otherwise leave empty.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "container_no": {"type": "string", "description": "ISO 6346 container # for this shipment"},
+                        "shipment_id":  {"type": "string", "description": "Shipment ID / SHIP-XXX / FB# for this shipment"},
+                        "po":           {"type": "string", "description": "Purchase Order # for this shipment"},
+                        "carrier":      {"type": "string", "description": "Underlying carrier (CN Rail, CPKC, etc.) — leave empty if same as invoice carrier"},
+                        "origin":       {"type": "string"},
+                        "destination":  {"type": "string"},
+                        "charge":       {"type": "number"},
+                    },
+                    "required": ["container_no", "charge"],
                 },
             },
         },
@@ -969,9 +987,18 @@ def _extract_via_anthropic(pdf_path):
                 {"type": "document",
                  "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64}},
                 {"type": "text", "text":
-                 "Extract this drayage invoice into the structured schema. "
-                 "fsc_pct is a fraction 0-1 (so 22% = 0.22). "
-                 "Include every shipment and every accessorial line."},
+                 "Extract this drayage freight invoice into the structured schema. "
+                 "Rules:\n"
+                 "1. Container numbers are ISO 6346 format: 4 letters + 7 digits (e.g. MSCU5990314, HLCU7936445).\n"
+                 "2. If the invoice contains a SHIPMENT TABLE with a row per shipment "
+                 "(headers like 'Container # | Shipment ID | PO # | Origin | Destination | Charge'), "
+                 "populate the `shipments` array with one entry PER ROW. Each shipment has its own "
+                 "container, shipment_id, PO, origin, destination, charge. Also populate top-level "
+                 "container_no/fb_no/po/origin/destination/base_rate from the FIRST shipment.\n"
+                 "3. For single-shipment invoices, leave `shipments` empty and populate only top-level fields.\n"
+                 "4. fsc_pct is a fraction 0-1 (so 22% = 0.22). Tag fuel surcharge lines as line_type 'FSC' "
+                 "(not 'ACCESSORIAL') so they don't double-count.\n"
+                 "5. Carrier names: prefer the issuing carrier (top of doc), not the underlying ocean line."},
             ],
         }],
     )
@@ -979,6 +1006,19 @@ def _extract_via_anthropic(pdf_path):
         if block.type == "tool_use" and block.name == "submit_invoice":
             data = dict(block.input)
             data["confidence"] = 0.95
+            data.setdefault("shipments", [])
+            # Safety net: when AI returned shipments[] but left the top-level
+            # container/fb/po blank, copy from the first shipment so the
+            # invoice row inserted into D.invoices isn't empty.
+            ships = data.get("shipments") or []
+            if ships:
+                first = ships[0] or {}
+                if not data.get("container_no"): data["container_no"] = first.get("container_no")
+                if not data.get("fb_no"):        data["fb_no"]        = first.get("shipment_id")
+                if not data.get("po"):           data["po"]           = first.get("po")
+                if not data.get("origin"):       data["origin"]       = first.get("origin")
+                if not data.get("destination"):  data["destination"]  = first.get("destination")
+                if not data.get("base_rate") and first.get("charge"): data["base_rate"] = first.get("charge")
             return data
     raise RuntimeError("Anthropic returned no tool_use block")
 
