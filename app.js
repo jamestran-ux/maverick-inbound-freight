@@ -10,51 +10,89 @@ const D = window.DATA;
 // ============================================================
 (function seedT49DemoRefs() {
   if (!D || !D.containers) return;
+  // Each entry seeds: 1 container (for Container page) + 1 invoice (for Load Visibility / Load Detail)
   const DEMO_REFS = [
-    { num: "CMDUSHZ7959898", line: "CMA CGM", vessel: "(live · T49)",
-      origin: "Shanghai, China",      port: "Long Beach, CA",
-      stage: "Awaiting Discharge",    risk: "LOW",
-      status: "MBL · live tracking",  note: "Demo · CMA CGM master BOL" },
-    { num: "TLLU4779831",     line: "—",        vessel: "(live · T49)",
-      origin: "—",                     port: "—",
-      stage: "Awaiting Discharge",    risk: "LOW",
-      status: "Live tracking",         note: "Demo · TLLU container" },
-    { num: "ZCSU7238990",     line: "ZIM",      vessel: "(live · T49)",
-      origin: "—",                     port: "—",
-      stage: "Awaiting Discharge",    risk: "LOW",
-      status: "Live tracking",         note: "Demo · ZIM container" },
-    { num: "NYKU0776734",     line: "ONE",      vessel: "(live · T49)",
-      origin: "—",                     port: "—",
-      stage: "Awaiting Discharge",    risk: "LOW",
-      status: "Live tracking",         note: "Demo · NYK (now ONE) ref" },
-    { num: "KOCU4970299",     line: "K Line",   vessel: "(live · T49)",
-      origin: "—",                     port: "—",
-      stage: "Awaiting Discharge",    risk: "LOW",
-      status: "Live tracking",         note: "Demo · K Line ref" },
+    { num: "CMDUSHZ7959898", line: "CMA CGM",      vessel: "CMA CGM AMERIGO VESPUCCI",
+      origin: "Shanghai, China",  port: "Long Beach, CA",  lfd: "2026-05-30",
+      load_id: "PCD25052601", invoice_no: "PCD-INV-99101", bol: "CMDUSHZ7959898",
+      carrier: "Pacific Coastline Drayage Inc.", linehaul: 575, fsc_amt: 126.5, acc: 30, total: 731.5,
+      stage: "Awaiting Discharge", risk: "LOW",
+      status: "PENDING REVIEW",   note: "Demo · CMA CGM master BOL — live Terminal49" },
+    { num: "TLLU4779831", line: "Hapag-Lloyd", vessel: "AL JMELIYAH",
+      origin: "Hamburg, Germany", port: "New York, NY",   lfd: "2026-06-02",
+      load_id: "PCD25052602", invoice_no: "PCD-INV-99102", bol: "HLCUHAM2407123",
+      carrier: "East Coast Container Logistics", linehaul: 685, fsc_amt: 150.7, acc: 0, total: 835.7,
+      stage: "Awaiting Discharge", risk: "LOW",
+      status: "PENDING REVIEW",   note: "Demo · TLLU container — live Terminal49" },
+    { num: "ZCSU7238990", line: "ZIM", vessel: "ZIM USA",
+      origin: "Yantian, China",   port: "New York, NY",   lfd: "2026-06-04",
+      load_id: "PCD25052603", invoice_no: "PCD-INV-99103", bol: "ZIMUSHA9384721",
+      carrier: "East Coast Container Logistics", linehaul: 695, fsc_amt: 152.9, acc: 0, total: 847.9,
+      stage: "Awaiting Discharge", risk: "LOW",
+      status: "PENDING REVIEW",   note: "Demo · ZIM container — live Terminal49" },
+    { num: "NYKU0776734", line: "ONE", vessel: "ONE COMMITMENT",
+      origin: "Yokohama, Japan",  port: "Tacoma, WA",     lfd: "2026-05-28",
+      load_id: "PCD25052604", invoice_no: "PCD-INV-99104", bol: "ONEYTYO00772841",
+      carrier: "Pacific Coastline Drayage Inc.", linehaul: 615, fsc_amt: 135.3, acc: 30, total: 780.3,
+      stage: "Awaiting Discharge", risk: "LOW",
+      status: "PENDING REVIEW",   note: "Demo · NYK (now ONE) ref — live Terminal49" },
+    { num: "KOCU4970299", line: "K Line", vessel: "ONE TRUST",
+      origin: "Busan, South Korea", port: "Long Beach, CA", lfd: "2026-05-23",
+      load_id: "PCD25052605", invoice_no: "PCD-INV-99105", bol: "ONEYPUS00497029",
+      carrier: "Pacific Coastline Drayage Inc.", linehaul: 545, fsc_amt: 119.9, acc: 85, total: 749.9,
+      stage: "Out-Gate Ready",   risk: "MEDIUM",
+      status: "PENDING REVIEW",   note: "Demo · K Line ref — live Terminal49 · LFD imminent" },
   ];
-  const existing = new Set(D.containers.map(c => c["Container #"]));
-  DEMO_REFS.forEach(r => {
-    if (existing.has(r.num)) return;
-    D.containers.push({
-      "Container #": r.num,
-      "Steamship Line": r.line,
-      "Vessel": r.vessel,
-      "Equipment": "40HC",
-      "Origin Port": r.origin,
-      "US Port": r.port,
-      "Discharge Date": "",
-      "Customs Status": "Pending",
-      "SSL Released": "No",
-      "LFD": "",
-      "Pickup Date": "",
-      "Free Time (days)": 7,
-      "Stage": r.stage,
-      "Demurrage Risk": r.risk,
-      "Status": r.status,
-      "Linked PO": "",
-      "Notes": r.note,
-      "_demo": true,
-    });
+
+  const existingContainers = new Set(D.containers.map(c => c["Container #"]));
+  const existingInvoices = new Set((D.invoices || []).map(i => i["Invoice #"]));
+  D.invoices = D.invoices || [];
+
+  DEMO_REFS.forEach((r, idx) => {
+    if (!existingContainers.has(r.num)) {
+      D.containers.push({
+        "Container #": r.num,
+        "Steamship Line": r.line,
+        "Vessel": r.vessel,
+        "Equipment": "40HC",
+        "Origin Port": r.origin,
+        "US Port": r.port,
+        "Discharge Date": "",
+        "Customs Status": "Pending",
+        "SSL Released": "No",
+        "LFD": r.lfd,
+        "Pickup Date": "",
+        "Free Time (days)": 7,
+        "Stage": r.stage,
+        "Demurrage Risk": r.risk,
+        "Status": r.status,
+        "Linked PO": "",
+        "Notes": r.note,
+        "_demo": true,
+      });
+    }
+    if (!existingInvoices.has(r.invoice_no)) {
+      D.invoices.push({
+        "#": 9100 + idx,
+        "Invoice #":         r.invoice_no,
+        "Carrier":           r.carrier,
+        "Invoice Date":      "2026-05-20",
+        "FB# / Load ID":     r.load_id,
+        "Container #":       r.num,
+        "BOL/MBL #":         r.bol,
+        "Origin":            r.origin,
+        "Destination":       r.port + " — NewAge DC",
+        "Equipment":         "40HC",
+        "Linehaul (USD)":    r.linehaul,
+        "FSC %":             "22%",
+        "FSC (USD)":         r.fsc_amt,
+        "Accessorials (USD)": r.acc,
+        "Grand Total (USD)": r.total,
+        "Status":            r.status,
+        "Audit Finding":     "—",
+        "_demo":             true,
+      });
+    }
   });
 })();
 
@@ -1051,36 +1089,98 @@ function suggestedAction(cont, inv, finding) {
   return `Monitor — ${h(cont.Status)}.`;
 }
 
-function milestones(cont, inv) {
+// Maps a live carrier event (T49 / mock / ShipsGo) to one of our canonical
+// timeline stages. Order matters for the "In Transit" disambiguation.
+const LIVE_EVENT_STAGE_MAP = [
+  // Order matters — first match wins. Mid-voyage / inland-leg patterns first
+  // so they win over generic "loaded" / "gate out" matches.
+  [/empty return|empty drop/i,                           "Empty Returned"],
+  [/transshipment|sailing|at sea|underway|in transit \(ocean\)|^in transit$/i, "In Transit (Ocean)"],
+  [/inland|rail|on truck|in transit \(inland\)/i,        "In Transit (Inland)"],
+  [/deliver(ed)?|consignee/i,                            "Delivered"],
+  [/gate ?out|picked up|departure from (pod|terminal)/i, "Pickup"],
+  [/available for pickup|out.?gate.?ready|ready for pickup|lfd/i, "Out-Gate Ready"],
+  [/ssl release|carrier release|line release|^released/i, "SSL Released"],
+  [/customs (cleared|release|hold lifted)/i,             "Customs Cleared"],
+  [/discharg/i,                                          "Discharge"],
+  [/vessel arriv|arrived (at )?(pod|destination)|berth/i,"Vessel Arrival"],
+  [/vessel departed|departed (pol|origin)|departure/i,   "Vessel ETD"],
+  [/load(ed)? (on|onto) vessel|on board|loaded onto/i,   "Vessel ETD"],
+  [/gate ?in|received at (pol|origin)|stuffed/i,         "Vessel ETD"],
+  [/empty.*released|empty.*pickup|empty.*depot/i,        "Vessel ETD"],
+];
+
+function _liveEventToStage(eventName) {
+  if (!eventName) return null;
+  for (const [re, st] of LIVE_EVENT_STAGE_MAP) {
+    if (re.test(eventName)) return st;
+  }
+  return null;
+}
+
+function milestones(cont, inv, live) {
   if (!cont) return `<div class="empty">No container milestones available.</div>`;
-  const stages = ["Vessel ETD", "Vessel Arrival", "Discharge", "Customs Cleared", "SSL Released", "Out-Gate Ready", "Pickup", "In Transit", "Delivered", "Empty Returned"];
-  const stage = cont.Stage;
-  const customsCleared = cont["Customs Status"] === "Cleared";
-  const sslReleased = cont["SSL Released"] === "Yes";
+  const stages = [
+    "Vessel ETD", "In Transit (Ocean)", "Vessel Arrival", "Discharge",
+    "Customs Cleared", "SSL Released", "Out-Gate Ready", "Pickup",
+    "In Transit (Inland)", "Delivered", "Empty Returned",
+  ];
+
   const done = new Set();
-  if (cont["Discharge Date"]) { done.add("Vessel ETD"); done.add("Vessel Arrival"); done.add("Discharge"); }
-  if (customsCleared) done.add("Customs Cleared");
-  if (sslReleased) done.add("SSL Released");
-  if (["Out-Gate Ready", "Delivered"].includes(stage)) done.add("Out-Gate Ready");
-  if (cont["Pickup Date"]) { done.add("Pickup"); done.add("In Transit"); }
-  if (stage === "Delivered") done.add("Delivered");
-  if ((cont.Status || "").includes("Returned")) done.add("Empty Returned");
+  const meta = {};
+
+  if (Array.isArray(live) && live.length) {
+    // Drive entirely from live carrier data. Each ACTUAL event marks its mapped
+    // stage (and all earlier stages) done; ESTIMATED events fill the meta line
+    // for upcoming stages but do not mark them done.
+    const actuals = live.filter(m => m.actual !== false);
+    const estimates = live.filter(m => m.actual === false);
+
+    let furthest = -1;
+    actuals.forEach(m => {
+      const st = _liveEventToStage(m.event);
+      if (!st) return;
+      const idx = stages.indexOf(st);
+      if (idx > furthest) furthest = idx;
+      meta[st] = `${(m.location || "").trim()}${m.timestamp ? " · " + _shortTs(m.timestamp) : ""}`;
+    });
+    for (let i = 0; i <= furthest; i++) done.add(stages[i]);
+
+    estimates.forEach(m => {
+      const st = _liveEventToStage(m.event);
+      if (!st || done.has(st)) return;
+      meta[st] = `ETA ${_shortTs(m.timestamp)}${m.location ? " · " + m.location : ""}`;
+    });
+  } else {
+    // Fallback: derive from the static container record (legacy behavior).
+    const stage = cont.Stage;
+    const customsCleared = cont["Customs Status"] === "Cleared";
+    const sslReleased = cont["SSL Released"] === "Yes";
+    if (cont["Discharge Date"]) { done.add("Vessel ETD"); done.add("In Transit (Ocean)"); done.add("Vessel Arrival"); done.add("Discharge"); }
+    if (customsCleared) done.add("Customs Cleared");
+    if (sslReleased) done.add("SSL Released");
+    if (["Out-Gate Ready", "Delivered"].includes(stage)) done.add("Out-Gate Ready");
+    if (cont["Pickup Date"]) { done.add("Pickup"); done.add("In Transit (Inland)"); }
+    if (stage === "Delivered") done.add("Delivered");
+    if ((cont.Status || "").includes("Returned")) done.add("Empty Returned");
+
+    Object.assign(meta, {
+      "Vessel ETD": cont["Discharge Date"] ? "−14d" : "",
+      "In Transit (Ocean)": cont["Discharge Date"] ? "voyage complete" : (stage === "Awaiting Discharge" ? "on the water" : ""),
+      "Vessel Arrival": cont["Discharge Date"] ? "vessel docked" : (stage === "Awaiting Discharge" ? "ETA 2026-05-22" : ""),
+      "Discharge": cont["Discharge Date"] || "",
+      "Customs Cleared": customsCleared ? "cleared" : (cont["Customs Status"] || "pending"),
+      "SSL Released": sslReleased ? "released" : (stage === "Awaiting Release" ? "expected <24h" : "—"),
+      "Out-Gate Ready": done.has("Out-Gate Ready") ? `LFD ${cont.LFD || "—"}` : "—",
+      "Pickup": cont["Pickup Date"] || "—",
+      "In Transit (Inland)": cont["Pickup Date"] && stage !== "Out-Gate Ready" ? "in transit" : "—",
+      "Delivered": stage === "Delivered" ? "delivered" : "—",
+      "Empty Returned": (cont.Status || "").includes("Returned") ? "returned" : "—",
+    });
+  }
 
   let curr = null;
   for (const s of stages) { if (!done.has(s)) { curr = s; break; } }
-
-  const meta = {
-    "Vessel ETD": cont["Discharge Date"] ? "−14d" : "",
-    "Vessel Arrival": cont["Discharge Date"] ? "vessel docked" : (stage === "Awaiting Discharge" ? "ETA 2026-05-22" : ""),
-    "Discharge": cont["Discharge Date"] || "",
-    "Customs Cleared": customsCleared ? "cleared" : (cont["Customs Status"] || "pending"),
-    "SSL Released": sslReleased ? "released" : (stage === "Awaiting Release" ? "expected <24h" : "—"),
-    "Out-Gate Ready": done.has("Out-Gate Ready") ? `LFD ${cont.LFD || "—"}` : "—",
-    "Pickup": cont["Pickup Date"] || "—",
-    "In Transit": cont["Pickup Date"] && stage !== "Out-Gate Ready" ? "in transit" : "—",
-    "Delivered": stage === "Delivered" ? "delivered" : "—",
-    "Empty Returned": (cont.Status || "").includes("Returned") ? "returned" : "—",
-  };
 
   return `<div class="timeline">` + stages.map(s => {
     const cls = done.has(s) ? "done" : (s === curr ? "curr" : "pending");
@@ -1089,6 +1189,16 @@ function milestones(cont, inv) {
       <div class="mile-meta">${h(meta[s] || "")}</div>
     </div>`;
   }).join("") + `</div>`;
+}
+
+// "2026-05-26T18:00:00Z" → "May 26 18:00"
+function _shortTs(ts) {
+  if (!ts) return "";
+  try {
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return ts;
+    return d.toLocaleString("en-US", { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+  } catch (_) { return ts; }
 }
 
 // ============================================================

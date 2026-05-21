@@ -560,13 +560,13 @@ function renderContainerDetail(root, containerId) {
       <div class="stack">
         <div class="card">
           <div class="card-head"><div class="card-title">Milestone timeline</div></div>
-          <div class="card-body">${milestones(c, inv || {})}</div>
+          <div class="card-body" id="milestone-body" data-container="${h(c["Container #"])}">${milestones(c, inv || {})}</div>
         </div>
 
         <div class="card" id="t49-card">
           <div class="card-head">
             <div class="card-title">Live tracking · Terminal49</div>
-            <button class="btn secondary sm" id="t49-refresh-btn" onclick="loadT49Card('${h(c["Container #"])}')">Refresh</button>
+            <button class="btn secondary sm" id="t49-refresh-btn" onclick="loadT49Card('${h(c["Container #"])}', {force:true})">Refresh</button>
           </div>
           <div class="card-body" id="t49-body">
             <div class="muted" style="font-size: 12.5px;">Loading…</div>
@@ -1187,17 +1187,34 @@ function _t49InferTracking(ref) {
 
 const T49_POLL_STATES = new Set(["created", "pending", "awaiting_manifest", "tracking_warning"]);
 
-async function loadT49Card(containerNo) {
+async function loadT49Card(containerNo, opts) {
   const body = document.getElementById("t49-body");
   if (!body) return;
+  const force = !!(opts && opts.force);
+  if (force) {
+    body.innerHTML = `<div class="muted" style="font-size:12.5px;">Refreshing from Terminal49…</div>`;
+  }
   try {
-    const resp = await fetch(`/api/containers/${encodeURIComponent(containerNo)}/tracking`);
+    const url = `/api/containers/${encodeURIComponent(containerNo)}/tracking${force ? "?force=true" : ""}`;
+    const resp = await fetch(url);
     const data = await resp.json();
     renderT49State(containerNo, data);
+    // Drive the seeded milestone timeline from live data when present
+    _syncMilestoneTimeline(containerNo, data.milestones);
   } catch (e) {
     body.innerHTML = `<div class="pill bad">Tracking error</div>
       <div style="font-size:12.5px; margin-top:6px;">${h(String(e && e.message || e))}</div>`;
   }
+}
+
+function _syncMilestoneTimeline(containerNo, liveMilestones) {
+  const host = document.getElementById("milestone-body");
+  if (!host || host.dataset.container !== containerNo) return;
+  const D = window.DATA;
+  const cont = (D.containers || []).find(c => c["Container #"] === containerNo);
+  const inv = (D.invoices || []).find(i => i["Container #"] === containerNo) || {};
+  if (!cont) return;
+  host.innerHTML = window.milestones(cont, inv, liveMilestones);
 }
 
 function renderT49State(containerNo, data) {
@@ -1312,12 +1329,12 @@ function renderT49State(containerNo, data) {
           </div>`).join("")}
       </div>` : `<div class="muted" style="font-size:12px;">No events yet.</div>`}
     <div style="margin-top:10px; display:flex; gap:8px;">
-      <button class="btn secondary sm" onclick="loadT49Card('${h(containerNo)}')">Refresh</button>
+      <button class="btn secondary sm" onclick="loadT49Card('${h(containerNo)}', {force:true})">Refresh</button>
       <button class="btn secondary sm" onclick="resetT49Tracking('${h(containerNo)}')">Re-track</button>
     </div>`;
 
   if (pending) {
-    setTimeout(() => loadT49Card(containerNo), 5000);
+    setTimeout(() => loadT49Card(containerNo, {force: true}), 5000);
   }
 }
 
@@ -1367,8 +1384,16 @@ async function startT49Tracking(containerNo, opts) {
   }
 }
 
-function resetT49Tracking(containerNo) {
-  renderT49State(containerNo, { t49_configured: true, status: "not_tracked", milestones: [] });
+async function resetT49Tracking(containerNo) {
+  const body = document.getElementById("t49-body");
+  if (body) body.innerHTML = `<div class="muted" style="font-size:12.5px;">Clearing tracking record…</div>`;
+  try {
+    await fetch(`/api/containers/${encodeURIComponent(containerNo)}/tracking`, { method: "DELETE" });
+  } catch (e) { /* non-fatal */ }
+  // Clear the seeded timeline too so it doesn't keep showing live-derived state
+  _syncMilestoneTimeline(containerNo, null);
+  // Reload — backend now reports not_tracked, which triggers auto-inference
+  loadT49Card(containerNo);
 }
 
 window.loadT49Card = loadT49Card;

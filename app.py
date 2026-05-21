@@ -688,8 +688,9 @@ def api_track_container(container_no):
 
 @app.route("/api/containers/<container_no>/tracking", methods=["GET"])
 def api_get_tracking(container_no):
-    """Return cached tracking state. If pending and we have a tracking_request_id,
-    poll T49 once: succeeded → fetch shipment, parse milestones, cache. """
+    """Return cached tracking state. If pending OR ?force=true, re-poll the
+    provider: fetch tracking_request → shipment → parse milestones → cache."""
+    force = (request.args.get("force") or "").lower() in ("1", "true", "yes")
     conn = get_conn()
     try:
         row = conn.execute(
@@ -714,7 +715,8 @@ def api_get_tracking(container_no):
     pending_states = {"created", "pending", "awaiting_manifest", "tracking_warning"}
     needs_milestone_fetch = bool(rec.get("shipment_id")) and not rec.get("last_event_at")
     should_poll = t49_configured() and (
-        (rec.get("status") in pending_states and rec.get("tracking_request_id"))
+        force
+        or (rec.get("status") in pending_states and rec.get("tracking_request_id"))
         or needs_milestone_fetch
     )
 
@@ -780,6 +782,19 @@ def api_get_tracking(container_no):
         rec["milestones"] = _milestones_from_cache(raw_json, container_no)
 
     return jsonify(rec)
+
+
+@app.route("/api/containers/<container_no>/tracking", methods=["DELETE"])
+def api_clear_tracking(container_no):
+    """Wipe the cached tracking row for this container so a fresh tracking
+    request can be submitted from scratch."""
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM container_tracking WHERE container_no = ?", (container_no,))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"container_no": container_no, "status": "cleared"})
 
 
 def _milestones_from_cache(raw_json, container_no):
