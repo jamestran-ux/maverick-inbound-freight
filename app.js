@@ -8,6 +8,47 @@ const D = window.DATA;
 // (added in-memory so they appear on the Containers / Load Visibility pages
 // alongside the seeded mock data — clicking them auto-fires T49 tracking)
 // ============================================================
+// Past-LFD demo containers (used by the Containers page top panel and the
+// dispatch recommendation flow). Seeded into D.containers so the click-through
+// from Past LFD / Detention Accruing actually lands on a real detail page.
+(function seedPastLFDDemoContainers() {
+  if (!D || !D.containers) return;
+  const PAST_LFD_DEMO = [
+    {
+      "Container #": "MSCU7732984", "Steamship Line": "MSC", "Vessel": "MSC INGRID",
+      "Equipment": "40HC", "Origin Port": "Shanghai, China", "US Port": "Long Beach, CA",
+      "Discharge Date": "2026-05-13", "Customs Status": "Cleared", "SSL Released": "Yes",
+      "LFD": "2026-05-16", "Pickup Date": "", "Free Time (days)": 5,
+      "Stage": "Out-Gate Ready", "Demurrage Risk": "HIGH",
+      "Status": "Past LFD — 3 days · demurrage accruing at MSC tier 1",
+      "Linked PO": "NA-PO-68301",
+      "Notes": "<b>Demo · past LFD</b> — recommended dispatch via West Coast Container Express ($20 cheaper than PCD)",
+      "_demo_past_lfd": true,
+      "_days_past_lfd": 3,
+      "_demurrage_daily": 250,
+      "_demurrage_accrued": 750,
+      "_origin_terminal": "Long Beach — Pier T",
+    },
+    {
+      "Container #": "ONEU8821453", "Steamship Line": "ONE", "Vessel": "ONE OLYMPUS",
+      "Equipment": "40HC", "Origin Port": "Shanghai, China", "US Port": "Long Beach, CA",
+      "Discharge Date": "2026-05-15", "Customs Status": "Cleared", "SSL Released": "Yes",
+      "LFD": "2026-05-18", "Pickup Date": "", "Free Time (days)": 5,
+      "Stage": "Out-Gate Ready", "Demurrage Risk": "HIGH",
+      "Status": "Past LFD — 1 day · demurrage accruing at ONE tier 1",
+      "Linked PO": "NA-PO-68302",
+      "Notes": "<b>Demo · past LFD</b> — dispatch ASAP via PCD if capacity available",
+      "_demo_past_lfd": true,
+      "_days_past_lfd": 1,
+      "_demurrage_daily": 250,
+      "_demurrage_accrued": 250,
+      "_origin_terminal": "Long Beach — Pier J",
+    },
+  ];
+  const existing = new Set(D.containers.map(c => c["Container #"]));
+  PAST_LFD_DEMO.forEach(r => { if (!existing.has(r["Container #"])) D.containers.push(r); });
+})();
+
 (function seedT49DemoRefs() {
   if (!D || !D.containers) return;
   // Each entry seeds: 1 container (for Container page) + 1 invoice (for Load Visibility / Load Detail)
@@ -417,6 +458,204 @@ const ROUTES = {};
 // DASHBOARD
 // ============================================================
 // ============================================================
+// AI DISPATCH RECOMMENDATION — rate card lookup + carrier capacity check
+// ============================================================
+// Threshold: carriers are flagged "at capacity" when more than this many
+// PENDING REVIEW drayage invoices are stacked on them this week.
+const DISPATCH_CAPACITY_THRESHOLD = 4;
+
+function aiDispatchRecommendation(cont, inv) {
+  // Resolve the lane. Prefer the container's specific origin terminal, fall
+  // back to the invoice's stated origin (which is usually labeled at the
+  // terminal level), then a generic LGB → Perris assumption.
+  const origin = cont._origin_terminal
+              || cont["Origin Terminal"]
+              || (inv && inv.Origin)
+              || "Long Beach — Pier T";
+  const dest = "NewAge Perris CA";
+
+  // Pull eligible rate-card rows for this exact lane + equipment.
+  let candidates = D.rateCard.filter(r =>
+    r.Carrier && r["Base Rate (USD)"] &&
+    r["Destination DC"] === dest &&
+    r.Equipment === (cont.Equipment || "40HC") &&
+    String(r["Origin Port/Terminal"] || "").includes(origin.split(" — ")[0] || origin)
+  );
+  // Strict origin match first; relax to any rate-card row for the lane if empty
+  if (candidates.length === 0) {
+    candidates = D.rateCard.filter(r =>
+      r.Carrier && r["Base Rate (USD)"] &&
+      r["Destination DC"] === dest &&
+      r.Equipment === (cont.Equipment || "40HC")
+    );
+  }
+
+  // Deduplicate to one row per carrier (cheapest terminal for that carrier)
+  const byCarrier = new Map();
+  for (const r of candidates) {
+    const cur = byCarrier.get(r.Carrier);
+    if (!cur || r["Base Rate (USD)"] < cur["Base Rate (USD)"]) byCarrier.set(r.Carrier, r);
+  }
+
+  const options = Array.from(byCarrier.values())
+    .map(r => ({
+      carrier: r.Carrier,
+      tier: r.Tier || "—",
+      rate: r["Base Rate (USD)"],
+      terminal: r["Origin Port/Terminal"],
+      tenderedCount: _loadsTenderedTo(r.Carrier),
+    }))
+    .map(o => ({ ...o, atCapacity: o.tenderedCount >= DISPATCH_CAPACITY_THRESHOLD }))
+    .sort((a, b) => a.rate - b.rate);
+
+  if (options.length === 0) {
+    return { lane: { origin, dest }, options: [], chosen: null, capacityBlocked: null };
+  }
+
+  const cheapest = options[0];
+  let chosen = cheapest;
+  let capacityBlocked = null;
+  if (cheapest.atCapacity) {
+    // Recommend next-cheapest that's not at capacity
+    const next = options.find(o => !o.atCapacity);
+    if (next) {
+      chosen = next;
+      capacityBlocked = cheapest;
+    }
+  }
+
+  // Demurrage day-one cost (per-diem ladder)
+  const ladder = D.perDiem.find(p => (p["Steamship Line"] || "").startsWith(cont["Steamship Line"] || ""));
+  const dayOneCost = ladder ? ladder["Demurrage Days 1–3 ($/day)"] : (cont._demurrage_daily || 275);
+
+  // Already-accrued exposure (if past LFD)
+  const accrued = Number(cont._demurrage_accrued || 0);
+
+  return {
+    lane: { origin, dest },
+    options,
+    chosen,
+    capacityBlocked,
+    dayOneCost,
+    accrued,
+    savings: capacityBlocked
+      ? Math.abs((capacityBlocked.rate - chosen.rate))
+      : 0,
+  };
+}
+
+function _loadsTenderedTo(carrierName) {
+  // Count this week's PENDING REVIEW invoices on this carrier as
+  // a proxy for tendered/unfulfilled commitments.
+  const target = String(carrierName || "").toLowerCase();
+  let count = 0;
+  for (const i of (D.invoices || [])) {
+    const c = String(i.Carrier || "").toLowerCase();
+    if (!c) continue;
+    // Match short codes too (PCD → Pacific Coastline)
+    if (c === target ||
+        (CARRIER_SHORT && CARRIER_SHORT[i.Carrier] && c.includes(target.split(" ")[0])) ||
+        c.includes(target.split(" ")[0])) {
+      const s = String(i.Status || "").toUpperCase();
+      if (s.includes("PENDING") || s === "TENDERED" || s === "DISPATCHED") count++;
+    }
+  }
+  return count;
+}
+
+function aiDispatchHtml(cont, inv) {
+  const rec = aiDispatchRecommendation(cont, inv);
+  if (!rec.chosen) {
+    return `<div class="muted">No rate card matches for this lane (${h(rec.lane.origin)} → ${h(rec.lane.dest)}).</div>`;
+  }
+  const ch = rec.chosen;
+  const blocked = rec.capacityBlocked;
+  const rows = rec.options.map(o => {
+    const isChosen = o.carrier === ch.carrier;
+    const cls = isChosen ? "ai-rec-row chosen" : (o.atCapacity ? "ai-rec-row blocked" : "ai-rec-row");
+    const tagHtml = isChosen
+      ? `<span class="pill ok">recommended</span>`
+      : o.atCapacity
+        ? `<span class="pill bad">at capacity · ${o.tenderedCount} loads</span>`
+        : `<span class="pill neutral">${o.tier}</span>`;
+    return `
+      <div class="${cls}" onclick="toggleCarrierCapacity('${h(o.carrier)}','${h(cont["Container #"])}')">
+        <div><b>${h(o.carrier)}</b> <span class="muted" style="font-size:11px;">· ${h(o.terminal)}</span></div>
+        <div class="mono">${fmt$0(o.rate)}</div>
+        <div>${tagHtml}</div>
+      </div>`;
+  }).join("");
+
+  const blockedExplain = blocked ? `
+    <div class="ai-rec-warn">
+      <b>⚠ ${h(blocked.carrier)} (cheapest @ ${fmt$0(blocked.rate)}) is at capacity</b> —
+      ${blocked.tenderedCount} loads already tendered this week (threshold ${DISPATCH_CAPACITY_THRESHOLD}).
+      Risk: missed pickup window, container rolls past next LFD checkpoint.
+      Maverick recommends <b>${h(ch.carrier)}</b> (next cheapest at ${fmt$0(ch.rate)}) instead.
+    </div>` : "";
+
+  const savingsLine = rec.accrued
+    ? `<div><b>Exposure today:</b> ${fmt$0(rec.accrued)} demurrage already accrued. Each additional day = ${fmt$0(rec.dayOneCost)}.</div>`
+    : `<div><b>Per-diem ladder:</b> ${fmt$0(rec.dayOneCost)}/day if missed. Dispatch today avoids day-one accrual.</div>`;
+
+  const rateDelta = blocked ? `· <b>${fmt$0(rec.savings)}</b> rate premium vs the capacity-blocked carrier` : "";
+
+  return `
+    <div class="ai-rec-summary">
+      <div><b>Recommended:</b> <span class="mono">${h(ch.carrier)}</span> @ ${fmt$0(ch.rate)} (${h(ch.tier)}) ${rateDelta}</div>
+      ${savingsLine}
+    </div>
+    ${blockedExplain}
+    <div class="ai-rec-table">
+      <div class="ai-rec-head"><div>Carrier</div><div>Rate</div><div>Status</div></div>
+      ${rows}
+    </div>
+    <div id="cap-detail-${h(cont["Container #"])}" class="ai-cap-detail" style="display:none;"></div>
+    <style>
+      .ai-rec-summary { background: #ecfdf5; border: 1px solid #a7f3d0; padding: 10px 12px; border-radius: 8px; font-size: 12.5px; margin-bottom: 8px; }
+      .ai-rec-warn { background: #fef3c7; border: 1px solid #fcd34d; padding: 10px 12px; border-radius: 8px; font-size: 12.5px; margin-bottom: 8px; }
+      .ai-rec-table { font-size: 12px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
+      .ai-rec-head, .ai-rec-row { display: grid; grid-template-columns: 1.6fr 0.6fr 1fr; gap: 8px; padding: 7px 10px; align-items: center; }
+      .ai-rec-head { background: #f1f5f9; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #475569; }
+      .ai-rec-row { border-top: 1px solid #e2e8f0; cursor: pointer; }
+      .ai-rec-row:hover { background: #f8fafc; }
+      .ai-rec-row.chosen { background: #ecfdf5; }
+      .ai-rec-row.blocked { background: #fef3c7; }
+      .ai-cap-detail { margin-top: 8px; font-size: 12px; }
+    </style>`;
+}
+
+// Toggle the carrier capacity detail panel showing the loads stacked on
+// the chosen carrier this week (so the user can audit the "at capacity" claim).
+window.toggleCarrierCapacity = function (carrier, containerNo) {
+  const host = document.getElementById(`cap-detail-${containerNo}`);
+  if (!host) return;
+  if (host.dataset.open === "1") {
+    host.style.display = "none"; host.dataset.open = "0"; return;
+  }
+  const loads = (D.invoices || []).filter(i => i.Carrier === carrier).slice(0, 8);
+  if (loads.length === 0) {
+    host.innerHTML = `<div class="muted" style="padding:8px;">No active loads tendered to ${h(carrier)} this week.</div>`;
+  } else {
+    host.innerHTML = `
+      <div style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+        <div style="background:#f1f5f9;padding:6px 10px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.04em;color:#475569;">
+          Loads tendered to ${h(carrier)} this week
+        </div>
+        ${loads.map(l => `
+          <div style="display:grid;grid-template-columns:1.2fr 1.2fr 1fr 0.8fr;gap:8px;padding:6px 10px;border-top:1px solid #e2e8f0;font-size:11.5px;cursor:pointer;"
+               onclick="event.stopPropagation();navigate('loads/${h(l["Invoice #"])}')">
+            <div class="mono"><b>${h(l["FB# / Load ID"] || "—")}</b></div>
+            <div class="mono">${h(l["Container #"] || "—")}</div>
+            <div>${h(l.Origin || "—")} → ${h(l.Destination || "—").replace(/^.*Perris.*/, "Perris CA")}</div>
+            <div class="num mono">${fmt$(l["Grand Total (USD)"] || 0)}</div>
+          </div>`).join("")}
+      </div>`;
+  }
+  host.style.display = "block"; host.dataset.open = "1";
+};
+
+// ============================================================
 // QUICK START — demo orientation banner (dismissible per browser session)
 // ============================================================
 const QUICK_START_DEMO_REFS = [
@@ -470,6 +709,8 @@ window.dismissQuickStart = function () {
 };
 window.QUICK_START_DEMO_REFS = QUICK_START_DEMO_REFS;
 window.quickStartBanner = quickStartBanner;
+window.aiDispatchHtml = aiDispatchHtml;
+window.aiDispatchRecommendation = aiDispatchRecommendation;
 
 ROUTES.dashboard = function (root) {
   const C = D.containers;

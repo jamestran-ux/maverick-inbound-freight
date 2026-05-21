@@ -339,6 +339,26 @@ def _extract_via_regex(pdf_path: str) -> dict:
     origin = _reject_header_word(origin)
     destination = _reject_header_word(destination)
 
+    # ---- Multi-shipment roll-up table? (Container/Carrier/Shipment/PO/Charge layout)
+    # Detect first because this signals a fundamentally different invoice shape
+    # (one freight bill covering N shipments). When present, we surface the
+    # per-shipment rows separately and the top-level fields reflect the FIRST
+    # shipment so the existing single-shipment UI still works.
+    shipments = _parse_shipment_rollup_table(all_tables)
+    if shipments:
+        first = shipments[0]
+        # The shipment row data is the SOURCE OF TRUTH for these fields —
+        # overrides any regex matches that may have caught label bleed from the
+        # table header (e.g. "Destination Charge", "Container # Carrier").
+        container_no = first.get("container_no") or container_no
+        fb_no        = first.get("shipment_id")  or fb_no
+        origin       = first.get("origin")       or origin
+        destination  = first.get("destination")  or destination
+        # Carrier label: broker (header) + actual carriers in rows
+        carriers_in_rows = sorted({s.get("carrier") for s in shipments if s.get("carrier")})
+        if carriers_in_rows and carrier_name and carrier_name not in carriers_in_rows:
+            carrier_name = f"{carrier_name} ({' / '.join(carriers_in_rows[:3])})"
+
     # ---- Line items + totals -------------------------------------------
     base_rate = 0.0
     fsc_pct = 0.0
@@ -349,6 +369,19 @@ def _extract_via_regex(pdf_path: str) -> dict:
         lines = _parse_customs_table(line_table)
     elif line_table:
         base_rate, fsc_pct, fsc_amount, lines = _parse_drayage_table(line_table)
+    elif shipments:
+        # Build SHIPMENT lines from the roll-up so the lines table is non-empty
+        for s in shipments:
+            lines.append({
+                "line_type": "SHIPMENT",
+                "description": f"Drayage {s.get('origin','')} → {s.get('destination','')} ({s.get('carrier','')})",
+                "qty": 1.0, "rate": s.get("charge", 0), "amount": s.get("charge", 0),
+                "container_no": s.get("container_no"),
+                "shipment_id": s.get("shipment_id"),
+                "po": s.get("po"),
+                "carrier": s.get("carrier"),
+            })
+        base_rate = sum(s.get("charge", 0) for s in shipments)
 
     # If table parsing produced nothing useful, fall back to narrative scan
     # (handles invoices with no tables — "Linehaul: $X.XX" style)
@@ -385,6 +418,8 @@ def _extract_via_regex(pdf_path: str) -> dict:
         "accessorials_total": accessorials_total,
         "grand_total": grand_total,
         "lines": lines,
+        "shipments": shipments,  # populated only for multi-shipment roll-up invoices
+        "po": (shipments[0].get("po") if shipments else None),
         "confidence": 0.85 if not is_customs_pdf else 0.88,
     }
 
@@ -719,6 +754,65 @@ def _parse_customs_table(table):
             "rate": _parse_money(cell(c_value)),
         })
     return lines
+
+
+def _parse_shipment_rollup_table(tables):
+    """Detect the "multi-shipment roll-up" layout where one invoice covers
+    several shipments and each row is its own shipment with container,
+    carrier, shipment id, PO, lane, and charge.
+
+    Header signature (any subset must include Container AND (Shipment OR PO)
+    AND a money/charge column):
+        Container # | Carrier | Shipment ID | PO # | Origin | Destination | Charge
+    Returns a list of shipment dicts, or [] if no matching table is found.
+    """
+    for t in tables:
+        if not t or len(t) < 2: continue
+        header = [str(c or "").strip().lower() for c in t[0]]
+        if not any("container" in c for c in header): continue
+        has_shipment = any("shipment" in c for c in header)
+        has_po       = any(("po" in c) or ("purchase order" in c) for c in header)
+        has_money    = any(c in {"charge", "amount", "subtotal", "total", "rate"} for c in header)
+        if not (has_shipment or has_po): continue
+        if not has_money: continue
+
+        def col(*needles):
+            for i, c in enumerate(header):
+                if any(n in c for n in needles): return i
+            return None
+
+        c_cont   = col("container")
+        c_carr   = col("carrier")
+        c_ship   = col("shipment")
+        c_po     = col("po", "purchase order")
+        c_orig   = col("origin", "from", "pol", "pickup")
+        c_dest   = col("destination", "delivery", "pod", "to ", "consignee")
+        c_money  = col("charge", "amount", "subtotal", "total", "rate")
+
+        shipments = []
+        for row in t[1:]:
+            cells = [(c or "").replace("\n", " ").strip() for c in row]
+            if not any(cells): continue
+            def cell(idx):
+                return cells[idx] if idx is not None and idx < len(cells) else ""
+            container = cell(c_cont)
+            # Skip total-style rows ("Subtotal", "Total Due", etc.)
+            if not container or container.lower() in ("subtotal", "total", "total due", "gst"): continue
+            if not re.match(r"^[A-Z]{4}\d{7}$", container.upper()):
+                # Container column doesn't look like ISO 6346 — bail on this row
+                continue
+            shipments.append({
+                "container_no": container,
+                "carrier":     cell(c_carr) or None,
+                "shipment_id": cell(c_ship) or None,
+                "po":          cell(c_po) or None,
+                "origin":      cell(c_orig) or None,
+                "destination": cell(c_dest) or None,
+                "charge":      _parse_money(cell(c_money)),
+            })
+        if shipments:
+            return shipments
+    return []
 
 
 def _parse_narrative_charges(text):

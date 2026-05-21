@@ -190,25 +190,36 @@ function kpiTileV5(tone, label, value, sub) {
 // =================================================================
 function panel1Html() {
   const q = (window.CONT_FILTERS && CONT_FILTERS.search) || "";
-  // Build unified rows, sort by $ exposure desc
+  // Build unified rows, sort by priority (urgency)
   const portRows = V5_PORT_PAST_LFD.map(r => ({
     kind: "port",
     container: r.container, ssl: r.ssl, stage: "Out-Gate Ready",
     cstatus: "Loaded", loc: r.port,
-    days: `${r.daysPast}d past LFD`, accrued: r.accrued,
+    days: `${r.daysPast}d past LFD`,
+    daysPast: r.daysPast, accrued: r.accrued, daily: r.daily,
     action: r.action, btn: "Send Dispatch", carrier: r.carrier, lfd: r.lfd,
   }));
   const dcRows = V5_DC_DWELLING_EMPTY.map(r => ({
     kind: "dc",
     container: r.container, ssl: r.ssl, stage: "Delivered",
     cstatus: "Empty", loc: r.loc,
-    days: `${r.daysDet}d detention`, accrued: r.accrued,
+    days: `${r.daysDet}d detention`,
+    daysPast: r.daysDet, accrued: r.accrued, daily: r.daily,
     action: r.action, btn: "Send Return",
   }));
-  let all = [...portRows, ...dcRows].sort((a, b) => b.accrued - a.accrued);
+  // Priority sort: largest accrued+1-day-cost first (urgency = exposure + immediacy)
+  let all = [...portRows, ...dcRows].sort((a, b) =>
+    (b.accrued + (b.daily || 0)) - (a.accrued + (a.daily || 0))
+  );
   if (q) all = all.filter(r => _contRowMatchesSearch(r, q));
   if (q && all.length === 0) return "";
   const total = all.reduce((s, r) => s + r.accrued, 0);
+  // Apply priority labels P1/P2/P3 in sorted order
+  all.forEach((r, i) => { r.priority = i === 0 ? "P1" : (i === 1 ? "P2" : "P3+"); });
+  // Tomorrow's projected exposure if no action taken (each container accrues another daily rate)
+  const exposureNextDay = all.reduce((s, r) => s + (r.daily || 0), 0);
+  // Estimated savings if all are dispatched today (avoid the next 24h accrual)
+  const projectedSavings = exposureNextDay;
 
   return `
     <div class="card panel-crit" style="margin-bottom: 14px;">
@@ -223,14 +234,16 @@ function panel1Html() {
         <table class="tbl">
           <thead>
             <tr>
+              <th>Priority</th>
               <th>Container</th><th>SSL</th><th>Stage</th><th>Status</th><th>Location</th>
-              <th>Days past threshold</th><th class="num">$ Accrued</th>
+              <th>Days past threshold</th><th class="num">$ Accrued</th><th class="num">+24h cost</th>
               <th>Recommended Action</th><th></th>
             </tr>
           </thead>
           <tbody>
             ${all.map(r => `
               <tr class="clickable ${r.kind === "port" ? "crit-row" : "warn-row"}" onclick="navigate('containers/${h(r.container)}')">
+                <td><span class="pill ${r.priority === 'P1' ? 'bad' : (r.priority === 'P2' ? 'warn' : 'neutral')}" style="font-weight:600;">${h(r.priority)}</span></td>
                 <td class="mono"><b>${h(r.container)}</b></td>
                 <td>${h(r.ssl)}</td>
                 <td>${stagePill(r.stage)}</td>
@@ -238,6 +251,7 @@ function panel1Html() {
                 <td>${h(r.loc)}</td>
                 <td class="mono">${h(r.days)}</td>
                 <td class="num ${r.kind === "port" ? "accrued-crit" : "accrued-warn"}">${fmt$0(r.accrued)}</td>
+                <td class="num mono" style="color:#b91c1c;">+${fmt$0(r.daily || 0)}</td>
                 <td>${h(r.action)}</td>
                 <td>
                   <button class="btn sm" onclick="event.stopPropagation();${
@@ -248,6 +262,13 @@ function panel1Html() {
                 </td>
               </tr>`).join("")}
           </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="7" style="text-align:right;font-weight:600;">If all are dispatched today, projected 24h savings:</td>
+              <td class="num" style="color:#166534;font-weight:700;">${fmt$0(projectedSavings)}</td>
+              <td colspan="3" class="muted" style="font-size:11.5px;">avoided demurrage + detention at current ladder rates</td>
+            </tr>
+          </tfoot>
         </table>
       </div>
     </div>`;
@@ -621,12 +642,13 @@ function renderContainerDetail(root, containerId) {
         ${showDispatch ? `
         <div class="ai-card">
           <span class="ai-badge">AI</span>
-          <div class="ai-title">Recommended action</div>
+          <div class="ai-title">Dispatch recommendation</div>
           <div class="ai-body" style="font-size: 12.5px;">
-            ${dispatchSuggestion(c)}
+            ${typeof window.aiDispatchHtml === "function" ? window.aiDispatchHtml(c, inv || {}) : dispatchSuggestion(c)}
           </div>
-          <div style="margin-top: 10px;">
+          <div style="margin-top: 10px; display:flex; gap:8px;">
             <button class="btn" onclick="openDispatchEmail('${h(inv ? inv["FB# / Load ID"] : c["Container #"])}','${h(c["Container #"])}','${h(c["Steamship Line"])}')">Send dispatch instruction</button>
+            <button class="btn secondary" onclick="navigate('rate-card')">Open rate card</button>
           </div>
         </div>` : ""}
 

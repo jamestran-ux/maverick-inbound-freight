@@ -14,7 +14,8 @@ ROUTES.invoices = function (root, sub) {
 };
 
 // ---- Drayage list (v5: status tabs + AI auto-approved fold) ----
-let DRAY_FILTERS = { tab: "pending", carrier: "all", severity: "all", search: "" };
+let DRAY_FILTERS = { tab: "pending", carriers: new Set(), severity: "all", search: "" };
+let DRAY_CARRIER_DROPDOWN_OPEN = false;
 let DRAY_AUTO_EXPAND = false;
 let DRAY_SORT = { col: null, dir: 1 };
 let CUSTOMS_SORT = { col: null, dir: 1 };
@@ -24,10 +25,19 @@ const DRAY_DISPUTED = new Set();  // populated when user opens a dispute
 
 function drayageTabCounts() {
   const all = D.invoices;
-  const isPending = i => (auditByInv[i["Invoice #"]] || String(i.Status || "").toUpperCase().includes("PENDING")) && !DRAY_DISPUTED.has(i["Invoice #"]);
+  const isDisputed = i => {
+    const s = String(i.Status || "").toUpperCase();
+    return DRAY_DISPUTED.has(i["Invoice #"]) || s.includes("DISPUTE") || s === "REJECTED";
+  };
+  const isPending = i => {
+    if (isDisputed(i)) return false;
+    const s = String(i.Status || "").toUpperCase();
+    if (s === "APPROVED" || s === "PAID" || s === "COMPLETE") return false;
+    return !!auditByInv[i["Invoice #"]] || s.includes("PENDING");
+  };
   const pending  = all.filter(isPending);
-  const disputed = all.filter(i => DRAY_DISPUTED.has(i["Invoice #"]));
-  const complete = all.filter(i => !isPending(i) && !DRAY_DISPUTED.has(i["Invoice #"]));
+  const disputed = all.filter(isDisputed);
+  const complete = all.filter(i => !isPending(i) && !isDisputed(i));
   return { all, pending, disputed, complete };
 }
 
@@ -36,7 +46,9 @@ function renderDrayageList(root) {
   const tabRows = { pending, in_dispute: disputed, complete, all }[DRAY_FILTERS.tab];
 
   let rows = tabRows.slice();
-  if (DRAY_FILTERS.carrier !== "all") rows = rows.filter(r => CARRIER_SHORT[r.Carrier] === DRAY_FILTERS.carrier);
+  if (DRAY_FILTERS.carriers && DRAY_FILTERS.carriers.size > 0) {
+    rows = rows.filter(r => DRAY_FILTERS.carriers.has(r.Carrier));
+  }
   if (DRAY_FILTERS.severity !== "all") rows = rows.filter(r => (auditByInv[r["Invoice #"]] || {}).Severity === DRAY_FILTERS.severity);
   if (DRAY_FILTERS.search) {
     const q = DRAY_FILTERS.search.toLowerCase();
@@ -115,10 +127,7 @@ function renderDrayageList(root) {
     ` : ""}
 
     <div class="toolbar">
-      ${chip("All carriers", "all", DRAY_FILTERS.carrier, tabRows.length)}
-      ${chip("PCD", "PCD", DRAY_FILTERS.carrier, tabRows.filter(r => CARRIER_SHORT[r.Carrier] === "PCD").length)}
-      ${chip("CDS", "CDS", DRAY_FILTERS.carrier, tabRows.filter(r => CARRIER_SHORT[r.Carrier] === "CDS").length)}
-      ${chip("ACS", "ACS", DRAY_FILTERS.carrier, tabRows.filter(r => CARRIER_SHORT[r.Carrier] === "ACS").length)}
+      ${_drayCarrierFilter(tabRows)}
       <span style="width: 14px;"></span>
       <select class="txt" id="drSev" style="font-size:12px;">
         <option value="all" ${DRAY_FILTERS.severity === "all" ? "selected" : ""}>All severity</option>
@@ -155,8 +164,24 @@ function renderDrayageList(root) {
     </div>
   `;
 
-  root.querySelectorAll(".chip[data-value]").forEach(c => {
-    c.addEventListener("click", () => { DRAY_FILTERS.carrier = c.dataset.value; render(); });
+  // Carrier multi-select toggle
+  const carrierBtn = document.getElementById("drCarrierBtn");
+  if (carrierBtn) carrierBtn.addEventListener("click", () => {
+    DRAY_CARRIER_DROPDOWN_OPEN = !DRAY_CARRIER_DROPDOWN_OPEN; render();
+  });
+  root.querySelectorAll('input[data-dray-carrier]').forEach(cb => {
+    cb.addEventListener("change", () => {
+      const val = cb.dataset.drayCarrier;
+      if (cb.checked) DRAY_FILTERS.carriers.add(val);
+      else DRAY_FILTERS.carriers.delete(val);
+      render();
+    });
+  });
+  const clearBtn = document.getElementById("drCarrierClear");
+  if (clearBtn) clearBtn.addEventListener("click", e => {
+    e.stopPropagation();
+    DRAY_FILTERS.carriers = new Set();
+    render();
   });
   $("#drSev").addEventListener("change", e => { DRAY_FILTERS.severity = e.target.value; render(); });
   $("#drSearch").addEventListener("input", e => {
@@ -174,9 +199,14 @@ function drayTab(key, label, count) {
 }
 
 function drayStatusPill(r) {
-  if (DRAY_DISPUTED.has(r["Invoice #"])) return '<span class="pill warn">In Dispute</span>';
+  const s = String(r.Status || "").toUpperCase();
+  const invId = r["Invoice #"];
+  if (DRAY_DISPUTED.has(invId) || s.includes("DISPUTE") || s === "REJECTED")
+    return '<span class="pill warn">In Dispute</span>';
+  if (s === "APPROVED" || s === "PAID")
+    return '<span class="pill ok">Approved</span>';
   // BUG-14: trust either auditByInv lookup OR the persisted Status field.
-  if (auditByInv[r["Invoice #"]] || String(r.Status || "").toUpperCase().includes("PENDING"))
+  if (auditByInv[invId] || s.includes("PENDING"))
     return '<span class="pill draft">Pending Review</span>';
   return '<span class="pill ok">Complete</span>';
 }
@@ -196,6 +226,60 @@ function _normalizeCarrier(name) {
 
 function chip(label, value, current, count) {
   return `<button class="chip ${current === value ? "active" : ""}" data-value="${h(value)}">${h(label)} ${count != null ? `<span class="chip-count">${count}</span>` : ""}</button>`;
+}
+
+// Multi-select carrier dropdown for the Drayage list. Options are derived
+// from the actual carriers present in D.invoices, so new carriers added via
+// upload automatically appear in the filter list.
+function _drayCarrierFilter(tabRows) {
+  const unique = Array.from(new Set((D.invoices || []).map(i => i.Carrier).filter(Boolean))).sort();
+  const counts = {};
+  for (const r of tabRows) counts[r.Carrier] = (counts[r.Carrier] || 0) + 1;
+  const selected = DRAY_FILTERS.carriers;
+  const label = selected.size === 0
+    ? `All carriers (${unique.length})`
+    : `${selected.size} carrier${selected.size === 1 ? "" : "s"} selected`;
+  const items = unique.map(name => {
+    const short = CARRIER_SHORT[name] || name;
+    const isChecked = selected.has(name);
+    const cnt = counts[name] || 0;
+    return `<label class="dr-carrier-item">
+      <input type="checkbox" data-dray-carrier="${h(name)}" ${isChecked ? "checked" : ""}>
+      <span class="dr-carrier-name">${h(short)}</span>
+      <span class="dr-carrier-full">${h(name)}</span>
+      <span class="dr-carrier-count">${cnt}</span>
+    </label>`;
+  }).join("");
+  return `
+    <div class="dr-carrier-host">
+      <button class="chip ${selected.size ? "active" : ""}" id="drCarrierBtn">
+        ${h(label)} ▾
+      </button>
+      ${DRAY_CARRIER_DROPDOWN_OPEN ? `
+        <div class="dr-carrier-pop">
+          ${items || `<div class="dr-carrier-empty">No carriers yet — upload an invoice.</div>`}
+          <div class="dr-carrier-foot">
+            <button class="btn-link" id="drCarrierClear">Clear all</button>
+          </div>
+        </div>
+      ` : ""}
+    </div>
+    <style>
+      .dr-carrier-host { position: relative; display: inline-block; }
+      .dr-carrier-pop { position: absolute; top: 110%; left: 0; z-index: 30;
+                        background: white; border: 1px solid #cbd5e1;
+                        border-radius: 8px; box-shadow: 0 8px 20px rgba(15,23,42,0.12);
+                        min-width: 280px; max-height: 360px; overflow-y: auto;
+                        padding: 4px 0; font-size: 12.5px; }
+      .dr-carrier-item { display: grid; grid-template-columns: 16px 1fr auto 28px;
+                         align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; }
+      .dr-carrier-item:hover { background: #f1f5f9; }
+      .dr-carrier-name { font-weight: 600; }
+      .dr-carrier-full { color: #64748b; font-size: 11px; }
+      .dr-carrier-count { color: #64748b; font-size: 11px; text-align: right; }
+      .dr-carrier-foot { padding: 6px 10px; border-top: 1px solid #e2e8f0; text-align: right; }
+      .dr-carrier-empty { padding: 10px; color: #64748b; font-style: italic; }
+    </style>`;
 }
 
 function drayRow(r) {
@@ -354,13 +438,26 @@ function _buildMatchChips(kind, data) {
     pos.slice(0, 6).forEach(p => _chip("PO", p, poKnown(p)));
     if (data.invoice_no) _chip("entry", data.invoice_no, false); // broker invoice # is always new
   } else {
-    // Drayage — multi-invoice Excel or single
-    const records = (data.invoices && data.invoices.length) ? data.invoices : [data];
-    records.slice(0, 6).forEach(rec => {
-      if (rec.container_no) _chip("container", rec.container_no, containerKnown(rec.container_no));
-      if (rec.fb_no) _chip("FB#", rec.fb_no, fbKnown(rec.fb_no));
-      if (rec.bol) _chip("BOL", rec.bol, false);
-    });
+    // Drayage. Three possible shapes:
+    // (a) multi-shipment roll-up PDF: data.shipments = [{container_no, carrier, shipment_id, po, ...}, ...]
+    // (b) multi-invoice Excel:        data.invoices  = [{container_no, fb_no, bol, ...}, ...]
+    // (c) single invoice:             use the top-level data fields
+    if (data.shipments && data.shipments.length) {
+      data.shipments.slice(0, 8).forEach(s => {
+        if (s.container_no) _chip("container", s.container_no, containerKnown(s.container_no));
+        if (s.shipment_id)  _chip("Shipment", s.shipment_id, false);
+        if (s.po)           _chip("PO", s.po, poKnown(s.po));
+        if (s.carrier)      _chip("carrier", s.carrier, false);
+      });
+    } else {
+      const records = (data.invoices && data.invoices.length) ? data.invoices : [data];
+      records.slice(0, 6).forEach(rec => {
+        if (rec.container_no) _chip("container", rec.container_no, containerKnown(rec.container_no));
+        if (rec.fb_no) _chip("FB#", rec.fb_no, fbKnown(rec.fb_no));
+        if (rec.bol) _chip("BOL", rec.bol, false);
+        if (rec.po) _chip("PO", rec.po, poKnown(rec.po));
+      });
+    }
   }
   return chips.join("");
 }
