@@ -647,8 +647,8 @@ function renderContainerDetail(root, containerId) {
             ${typeof window.aiDispatchHtml === "function" ? window.aiDispatchHtml(c, inv || {}) : dispatchSuggestion(c)}
           </div>
           <div style="margin-top: 10px; display:flex; gap:8px;">
-            <button class="btn" onclick="openDispatchEmail('${h(inv ? inv["FB# / Load ID"] : c["Container #"])}','${h(c["Container #"])}','${h(c["Steamship Line"])}')">Send dispatch instruction</button>
-            <button class="btn secondary" onclick="navigate('rate-card')">Open rate card</button>
+            <button class="btn" onclick="(function(){ const sel = (window._dispatchSelectedCarrier||{})['${h(c["Container #"])}']; openDispatchEmail('${h(inv ? inv["FB# / Load ID"] : c["Container #"])}','${h(c["Container #"])}', sel || '${h(c["Steamship Line"])}'); })()">Send dispatch instruction</button>
+            <button class="btn secondary" onclick="navigate('ratecard')">Open rate card</button>
           </div>
         </div>` : ""}
 

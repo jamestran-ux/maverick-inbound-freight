@@ -608,8 +608,33 @@ window.uploadInvoice = async function (kind, endpoint) {
           if (findings > 0) CUSTOMS_PENDING_ENTRIES.add(entryRow.entry);
         }
       } else {
-        // Drayage — may be one record OR multiple (flat Excel)
-        const invs = (data.invoices && data.invoices.length) ? data.invoices : [data];
+        // Drayage — three possible upload shapes:
+        //   (a) data.shipments[]: multi-shipment freight-bill PDF (Prairie /
+        //       Maersk / Hapag style — one invoice covering N shipments).
+        //       Each shipment becomes its own row in D.invoices with the
+        //       parent invoice_no suffixed by -1, -2, ... so they're distinct.
+        //   (b) data.invoices[]: multi-invoice flat-list Excel
+        //   (c) single record
+        let invs;
+        if (data.shipments && data.shipments.length) {
+          invs = data.shipments.map((s, idx) => ({
+            invoice_no:    `${data.invoice_no || file.name}-${idx + 1}`,
+            carrier_name:  s.carrier || data.carrier_name,
+            invoice_date:  data.invoice_date,
+            fb_no:         s.shipment_id,
+            container_no:  s.container_no,
+            po:            s.po,
+            bol:           null,
+            origin:        s.origin,
+            destination:   s.destination,
+            base_rate:     s.charge,
+            grand_total:   s.charge,
+            fsc_amount:    0,
+            accessorials_total: 0,
+          }));
+        } else {
+          invs = (data.invoices && data.invoices.length) ? data.invoices : [data];
+        }
         for (const v of invs) {
           const rawCarrier = v.carrier_name || data.carrier_name || "Unknown";
           // Normalize carrier names — uppercase variants like "PACIFIC COASTLINE
@@ -623,6 +648,7 @@ window.uploadInvoice = async function (kind, endpoint) {
             "FB# / Load ID": v.fb_no || data.fb_no || "",
             "Container #": v.container_no || data.container_no || "",
             "BOL/MBL #": v.bol || data.bol || "",
+            "PO #": v.po || data.po || "",
             "Origin": v.origin || data.origin || "",
             "Destination": v.destination || data.destination || "",
             "Equipment": "40HC",
@@ -764,10 +790,23 @@ function renderDrayageDetail(root, invId) {
             </tfoot>
           </table>
         </div>
-        <div style="padding: 12px 16px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px;">
-          <button class="btn secondary" onclick="rejectInvoice('${h(inv["Invoice #"])}')">Reject</button>
-          ${finding ? `<button class="btn secondary" onclick="openDispute('${h(inv["Invoice #"])}')">Send dispute</button>` : ""}
-          <button class="btn" onclick="approveInvoice('${h(inv["Invoice #"])}')">Approve invoice</button>
+        <div style="padding: 12px 16px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; align-items: center;">
+          ${(() => {
+            const s = String(inv.Status || "").toUpperCase();
+            const isApproved = s === "APPROVED" || s === "PAID";
+            const isDisputed = DRAY_DISPUTED.has(inv["Invoice #"]) || s.includes("DISPUTE") || s === "REJECTED";
+            if (isApproved) {
+              return `<span class="pill ok" style="font-size:12px;">✓ Approved · queued for payment</span>
+                      <button class="btn secondary sm" onclick="navigate('invoices/drayage')">Back to list</button>`;
+            }
+            if (isDisputed) {
+              return `<span class="pill warn" style="font-size:12px;">⚠ In dispute · rejected and logged to carrier AR</span>
+                      <button class="btn secondary sm" onclick="navigate('invoices/drayage')">Back to list</button>`;
+            }
+            return `<button class="btn secondary" onclick="rejectInvoice('${h(inv["Invoice #"])}')">Reject</button>
+                    ${finding ? `<button class="btn secondary" onclick="openDispute('${h(inv["Invoice #"])}')">Send dispute</button>` : ""}
+                    <button class="btn" onclick="approveInvoice('${h(inv["Invoice #"])}')">Approve invoice</button>`;
+          })()}
         </div>
       </div>
 
@@ -776,12 +815,13 @@ function renderDrayageDetail(root, invId) {
           <div class="card-head"><div class="card-title">Load details</div></div>
           <div class="card-body">
             <dl class="kv-grid">
-              <dt>FB# / Load ID</dt><dd><a onclick="navigate('loads/${h(inv["Invoice #"])}')" class="mono">${h(inv["FB# / Load ID"])}</a></dd>
-              <dt>Container</dt><dd><a onclick="navigate('containers/${h(inv["Container #"])}')" class="mono">${h(inv["Container #"])}</a></dd>
-              <dt>BOL / MBL</dt><dd class="mono">${h(inv["BOL/MBL #"])}</dd>
-              <dt>Equipment</dt><dd>${h(inv.Equipment)}</dd>
-              <dt>Origin</dt><dd>${h(inv.Origin)}</dd>
-              <dt>Destination</dt><dd>${h(inv.Destination)}</dd>
+              <dt>FB# / Shipment ID</dt><dd><a onclick="navigate('loads/${h(inv["Invoice #"])}')" class="mono">${h(inv["FB# / Load ID"] || "—")}</a></dd>
+              <dt>Container</dt><dd>${inv["Container #"] ? `<a onclick="navigate('containers/${h(inv["Container #"])}')" class="mono">${h(inv["Container #"])}</a>` : '<span class="muted">—</span>'}</dd>
+              <dt>PO #</dt><dd class="mono">${h(inv["PO #"] || "—")}</dd>
+              <dt>BOL / MBL</dt><dd class="mono">${h(inv["BOL/MBL #"] || "—")}</dd>
+              <dt>Equipment</dt><dd>${h(inv.Equipment || "—")}</dd>
+              <dt>Origin</dt><dd>${h(inv.Origin || "—")}</dd>
+              <dt>Destination</dt><dd>${h(inv.Destination || "—")}</dd>
               ${cont ? `<dt>Stage</dt><dd>${stagePill(cont.Stage)}</dd>` : ""}
             </dl>
           </div>

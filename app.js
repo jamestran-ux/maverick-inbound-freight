@@ -570,21 +570,31 @@ function aiDispatchHtml(cont, inv) {
   }
   const ch = rec.chosen;
   const blocked = rec.capacityBlocked;
+  const containerId = cont["Container #"];
   const rows = rec.options.map(o => {
-    const isChosen = o.carrier === ch.carrier;
+    const isChosen = (window._dispatchSelectedCarrier && window._dispatchSelectedCarrier[containerId] === o.carrier)
+                    || (!window._dispatchSelectedCarrier?.[containerId] && o.carrier === ch.carrier);
     const cls = isChosen ? "ai-rec-row chosen" : (o.atCapacity ? "ai-rec-row blocked" : "ai-rec-row");
     const tagHtml = isChosen
-      ? `<span class="pill ok">recommended</span>`
+      ? `<span class="pill ok">selected</span>`
       : o.atCapacity
         ? `<span class="pill bad">at capacity · ${o.tenderedCount} loads</span>`
-        : `<span class="pill neutral">${o.tier}</span>`;
+        : `<span class="pill neutral">${h(o.tier)}</span>`;
     return `
-      <div class="${cls}" onclick="toggleCarrierCapacity('${h(o.carrier)}','${h(cont["Container #"])}')">
+      <div class="${cls}">
         <div><b>${h(o.carrier)}</b> <span class="muted" style="font-size:11px;">· ${h(o.terminal)}</span></div>
         <div class="mono">${fmt$0(o.rate)}</div>
-        <div>${tagHtml}</div>
+        <div style="display:flex; gap:6px; align-items:center; justify-content:flex-end;">
+          ${tagHtml}
+          ${isChosen ? "" : `<button class="btn sm" onclick="selectDispatchCarrier('${h(containerId)}','${h(o.carrier)}', ${o.rate}, ${o.atCapacity ? 'true' : 'false'})">Use</button>`}
+          <button class="btn-link" style="font-size:11px;" onclick="toggleCarrierCapacity('${h(o.carrier)}','${h(containerId)}')">view loads</button>
+        </div>
       </div>`;
   }).join("");
+
+  // Active selection summary
+  const selectedCarrier = (window._dispatchSelectedCarrier && window._dispatchSelectedCarrier[containerId]) || ch.carrier;
+  const selectedRow = rec.options.find(o => o.carrier === selectedCarrier) || ch;
 
   const blockedExplain = blocked ? `
     <div class="ai-rec-warn">
@@ -600,17 +610,22 @@ function aiDispatchHtml(cont, inv) {
 
   const rateDelta = blocked ? `· <b>${fmt$0(rec.savings)}</b> rate premium vs the capacity-blocked carrier` : "";
 
+  const usingDefault = !(window._dispatchSelectedCarrier && window._dispatchSelectedCarrier[containerId]);
+  const summaryHtml = usingDefault
+    ? `<div><b>Recommended:</b> <span class="mono">${h(ch.carrier)}</span> @ ${fmt$0(ch.rate)} (${h(ch.tier)}) ${rateDelta}</div>
+       ${savingsLine}`
+    : `<div><b>Selected:</b> <span class="mono">${h(selectedRow.carrier)}</span> @ ${fmt$0(selectedRow.rate)} (${h(selectedRow.tier)}) ${selectedRow.atCapacity ? '<span class="pill warn" style="margin-left:6px;">override · capacity risk acknowledged</span>' : ''}</div>
+       <div class="muted" style="font-size:11.5px; margin-top:4px;">Maverick recommended <b>${h(ch.carrier)}</b> @ ${fmt$0(ch.rate)}. <a onclick="selectDispatchCarrier('${h(containerId)}','${h(ch.carrier)}', ${ch.rate}, ${ch.atCapacity}, true)">Revert to recommendation</a></div>
+       ${savingsLine}`;
+
   return `
-    <div class="ai-rec-summary">
-      <div><b>Recommended:</b> <span class="mono">${h(ch.carrier)}</span> @ ${fmt$0(ch.rate)} (${h(ch.tier)}) ${rateDelta}</div>
-      ${savingsLine}
-    </div>
+    <div class="ai-rec-summary">${summaryHtml}</div>
     ${blockedExplain}
     <div class="ai-rec-table">
-      <div class="ai-rec-head"><div>Carrier</div><div>Rate</div><div>Status</div></div>
+      <div class="ai-rec-head"><div>Carrier</div><div>Rate</div><div></div></div>
       ${rows}
     </div>
-    <div id="cap-detail-${h(cont["Container #"])}" class="ai-cap-detail" style="display:none;"></div>
+    <div id="cap-detail-${h(containerId)}" class="ai-cap-detail" style="display:none;"></div>
     <style>
       .ai-rec-summary { background: #ecfdf5; border: 1px solid #a7f3d0; padding: 10px 12px; border-radius: 8px; font-size: 12.5px; margin-bottom: 8px; }
       .ai-rec-warn { background: #fef3c7; border: 1px solid #fcd34d; padding: 10px 12px; border-radius: 8px; font-size: 12.5px; margin-bottom: 8px; }
@@ -624,6 +639,23 @@ function aiDispatchHtml(cont, inv) {
       .ai-cap-detail { margin-top: 8px; font-size: 12px; }
     </style>`;
 }
+
+// Persist the user's dispatch carrier choice in-memory (per container) so
+// the AI card highlights it and the dispatch email/instruction uses it.
+window._dispatchSelectedCarrier = window._dispatchSelectedCarrier || {};
+
+window.selectDispatchCarrier = function (containerNo, carrier, rate, atCapacity, revertToRecommended) {
+  // When revertToRecommended is true we clear the override
+  if (revertToRecommended) {
+    delete window._dispatchSelectedCarrier[containerNo];
+    toast(`Reverted to AI-recommended carrier for ${containerNo}`);
+  } else {
+    window._dispatchSelectedCarrier[containerNo] = carrier;
+    const cap = atCapacity ? " (capacity risk acknowledged)" : "";
+    toast(`Selected ${carrier} @ $${rate} for ${containerNo}${cap}`);
+  }
+  render();
+};
 
 // Toggle the carrier capacity detail panel showing the loads stacked on
 // the chosen carrier this week (so the user can audit the "at capacity" claim).
