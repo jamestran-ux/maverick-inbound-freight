@@ -404,6 +404,7 @@ def api_upload_drayage():
         "fb_no": data.get("fb_no"),
         "container_no": data.get("container_no"),
         "bol": data.get("bol"),
+        "po": data.get("po"),
         "origin": data.get("origin"),
         "destination": data.get("destination"),
         "base_rate": data.get("base_rate", 0),
@@ -417,6 +418,8 @@ def api_upload_drayage():
     }
     if data.get("invoices"):
         response["invoices"] = data["invoices"]
+    if data.get("shipments"):
+        response["shipments"] = data["shipments"]
     return jsonify(response)
 
 

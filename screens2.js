@@ -462,6 +462,68 @@ function _buildMatchChips(kind, data) {
   return chips.join("");
 }
 
+// Render a verbose "what we extracted" table inside the upload result row so
+// the user can confirm fields landed without having to navigate.
+function _buildExtractedFieldsTable(kind, data) {
+  const cells = (rows) => `
+    <table style="font-size:11.5px;width:100%;margin-top:6px;border-collapse:collapse;">
+      <thead>
+        <tr style="background:#d1fae5;color:#065f46;text-align:left;">
+          ${rows[0].map(h => `<th style="padding:4px 6px;border:1px solid #a7f3d0;">${h}</th>`).join("")}
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.slice(1).map(r => `
+          <tr>${r.map(c => `<td class="mono" style="padding:4px 6px;border:1px solid #a7f3d0;background:#ecfdf5;">${c || "—"}</td>`).join("")}</tr>
+        `).join("")}
+      </tbody>
+    </table>`;
+
+  if (kind === 'customs') {
+    if (data.entries && data.entries.length) {
+      const rows = [["Entry #", "Container", "PO #", "HTS", "Duty", "Subtotal"]];
+      data.entries.slice(0, 12).forEach(e => rows.push([
+        e.entry, e.container, e.po, e.hts, e.duty ? `$${e.duty.toLocaleString()}` : "—",
+        e.subtotal ? `$${e.subtotal.toLocaleString()}` : "—",
+      ]));
+      return cells(rows);
+    }
+  } else {
+    if (data.shipments && data.shipments.length) {
+      const rows = [["Container #", "Shipment ID", "FB# / Load ID", "PO #", "Carrier", "Lane", "Charge"]];
+      data.shipments.slice(0, 12).forEach(s => rows.push([
+        s.container_no,
+        s.shipment_id,
+        s.shipment_id,  // shipment_id IS the FB# / Load ID for these freight bills
+        s.po,
+        s.carrier || data.carrier_name,
+        `${s.origin || "—"} → ${s.destination || "—"}`,
+        s.charge ? `$${s.charge.toLocaleString()}` : "—",
+      ]));
+      return cells(rows);
+    }
+    if (data.invoices && data.invoices.length) {
+      const rows = [["Container #", "FB# / Load ID", "BOL", "Carrier", "Total"]];
+      data.invoices.slice(0, 12).forEach(v => rows.push([
+        v.container_no, v.fb_no, v.bol, v.carrier_name,
+        v.grand_total ? `$${v.grand_total.toLocaleString()}` : "—",
+      ]));
+      return cells(rows);
+    }
+    // Single record — show the top-level fields as one row
+    if (data.container_no || data.fb_no || data.bol) {
+      const rows = [["Container #", "FB# / Load ID", "BOL", "PO #", "Lane", "Total"]];
+      rows.push([
+        data.container_no, data.fb_no, data.bol, data.po || "—",
+        `${data.origin || "—"} → ${data.destination || "—"}`,
+        data.grand_total ? `$${data.grand_total.toLocaleString()}` : "—",
+      ]);
+      return cells(rows);
+    }
+  }
+  return "";
+}
+
 function _upsertDrayage(inv) {
   _ensureContainerStub(inv["Container #"], inv.Origin);
   const idx = (D.invoices || []).findIndex(x => x["Invoice #"] === inv["Invoice #"]);
@@ -617,8 +679,17 @@ window.uploadInvoice = async function (kind, endpoint) {
         //   (c) single record
         let invs;
         if (data.shipments && data.shipments.length) {
+          // Clean up any stale parent invoice row from older (pre-multi-shipment-fix)
+          // uploads. That row would have the bare parent invoice_no with empty
+          // container/FB# fields and would otherwise mask the real shipment rows.
+          const parentNo = data.invoice_no;
+          if (parentNo) {
+            const stale = D.invoices.findIndex(x => x["Invoice #"] === parentNo);
+            if (stale >= 0) D.invoices.splice(stale, 1);
+            delete auditByInv[parentNo];
+          }
           invs = data.shipments.map((s, idx) => ({
-            invoice_no:    `${data.invoice_no || file.name}-${idx + 1}`,
+            invoice_no:    `${parentNo || file.name}-${idx + 1}`,
             carrier_name:  s.carrier || data.carrier_name,
             invoice_date:  data.invoice_date,
             fb_no:         s.shipment_id,
@@ -683,20 +754,25 @@ window.uploadInvoice = async function (kind, endpoint) {
       totalReplaced += replacedThis;
 
       const dupNote = replacedThis ? ` <em style="color:#7a4a00;">(replaced ${replacedThis} duplicate${replacedThis === 1 ? '' : 's'})</em>` : "";
+      const shipmentCount = (data.shipments || []).length;
       const refLabel = (kind === 'customs' && data.entries?.length > 1)
         ? `${data.invoice_no || data.entry_no} (${data.entries.length} entries)`
-        : (data.invoices?.length > 1
-            ? `${data.invoices.length} invoices`
-            : (data.invoice_no || data.entry_no || file.name));
+        : shipmentCount > 1
+          ? `${data.invoice_no} → ${shipmentCount} shipment rows`
+          : (data.invoices?.length > 1
+              ? `${data.invoices.length} invoices`
+              : (data.invoice_no || data.entry_no || file.name));
 
       // Build match-back chips so user can see which container / FB# / PO got
       // matched against existing records in the dataset.
       const matchChips = _buildMatchChips(kind, data);
+      const extractedTable = _buildExtractedFieldsTable(kind, data);
 
       rowDiv.style.background = '#E1F5EE'; rowDiv.style.color = '#085041';
       rowDiv.innerHTML = `
         <div><strong>✓ ${refLabel}</strong> · ${data.carrier_name || data.broker || ''} · ${findings} finding${findings === 1 ? '' : 's'} · ${data.status || (findings ? 'Pending Review' : 'Complete')}${data.grand_total ? ` · $${(data.grand_total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}` : ''}${dupNote}</div>
-        ${matchChips ? `<div style="margin-top:6px; display:flex; flex-wrap:wrap; gap:6px;">${matchChips}</div>` : ''}`;
+        ${matchChips ? `<div style="margin-top:6px; display:flex; flex-wrap:wrap; gap:6px;">${matchChips}</div>` : ''}
+        ${extractedTable}`;
     } catch (e) {
       failed += 1;
       rowDiv.style.background = '#FCEBEB'; rowDiv.style.color = '#791F1F';
@@ -714,6 +790,14 @@ window.uploadInvoice = async function (kind, endpoint) {
   btn.disabled = false;
   btn.onclick = function () {
     closeModal();
+    // Auto-switch to the "All" tab so new uploads are visible regardless of
+    // whether they came out PENDING REVIEW or COMPLETE — most user confusion
+    // is from looking at the Pending tab and not seeing rows that auto-completed.
+    if (kind === 'drayage') {
+      DRAY_FILTERS.tab = 'all';
+      DRAY_FILTERS.carriers = new Set();  // clear filter so new carriers show
+      DRAY_FILTERS.search = '';
+    }
     if (typeof render === 'function') render();
     toast(`${totalAdded} added · ${totalReplaced} replaced · ${totalFindings} finding${totalFindings === 1 ? '' : 's'}`);
   };
