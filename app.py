@@ -43,6 +43,45 @@ t49_find_shipment_by_reference       = _tp.find_shipment_by_reference
 T49Error                             = _tp.T49Error
 T49DuplicateError                    = _tp.T49DuplicateError
 
+# ── Container stage progression ─────────────────────────────────────────────
+# Higher rank = further along the pipeline. Used by the tracking→stage sync so
+# we never downgrade a stage that was already set by a later operational event.
+_STAGE_RANK = {
+    "In Transit":         0,
+    "Awaiting Discharge": 1,
+    "In Customs":         2,
+    "Awaiting Release":   3,
+    "Out-Gate Ready":     4,
+    "Delivered":          5,
+}
+
+# Keywords in carrier movement event strings → the stage they imply.
+# Checked in order (first keyword hit wins for a given event row). We scan all
+# actual events and promote to whichever stage has the highest rank.
+_EVENT_STAGE_MAP = [
+    # ── Vessel at sea ────────────────────────────────────────────────────────
+    ("GATE IN",          "In Transit"),
+    ("LOAD",             "In Transit"),
+    ("DEPART",           "In Transit"),
+    ("SAILING",          "In Transit"),
+    ("IN TRANSIT",       "In Transit"),
+    ("VESSEL DEPARTURE", "In Transit"),
+    # ── Vessel arrived at POD ────────────────────────────────────────────────
+    ("VESSEL ARRIVAL",   "Awaiting Discharge"),
+    ("ARRIVED",          "Awaiting Discharge"),
+    ("ARRIVAL",          "Awaiting Discharge"),
+    # ── Container off the vessel / through the gate ──────────────────────────
+    ("DISCHARGED",       "In Customs"),
+    ("DISCHARGE",        "In Customs"),
+    ("UNLOAD",           "In Customs"),
+    ("OUT-GATE",         "In Customs"),
+    ("OUTGATE",          "In Customs"),
+    ("GATE OUT",         "In Customs"),
+]
+
+# Keywords that indicate a discharge has occurred (used to back-fill discharge_date)
+_DISCHARGE_KEYWORDS = {"DISCHARGED", "DISCHARGE", "UNLOAD", "OUT-GATE", "OUTGATE", "GATE OUT"}
+
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
@@ -783,12 +822,16 @@ def api_get_tracking(container_no):
             rec.pop("raw_json", None)
             rec["milestones"] = parsed["milestones"]
             rec["t49_configured"] = True
+            # Promote containers.stage / back-fill discharge_date from live events
+            _sync_container_stage_from_tracking(container_no, parsed["milestones"])
         except T49Error as e:
             rec["error"] = str(e)
             rec["milestones"] = []
     else:
         # Render whatever milestones are already cached
         rec["milestones"] = _milestones_from_cache(raw_json, container_no)
+        # Sync stage even from cached milestones (idempotent — only moves forward)
+        _sync_container_stage_from_tracking(container_no, rec["milestones"])
 
     return jsonify(rec)
 
@@ -817,6 +860,74 @@ def _milestones_from_cache(raw_json, container_no):
     except Exception:
         pass
     return []
+
+
+def _sync_container_stage_from_tracking(container_no: str, milestones: list):
+    """Promote containers.stage (and back-fill discharge_date) from live tracking events.
+
+    Rules enforced:
+    • Only events marked actual=True drive stage changes — estimated/future events
+      are ignored so a far-future ETA doesn't leapfrog the real state.
+    • The stage can only move FORWARD. If the DB already holds a higher-rank stage
+      (set by a later operational event or manual update), we leave it untouched.
+    • If a discharge event carries a timestamp, discharge_date is back-filled only
+      when the field is currently NULL (never overwrites an existing date).
+    """
+    if not milestones:
+        return
+
+    best_stage = None
+    discharge_ts = None
+
+    for m in milestones:
+        # Skip events that haven't actually happened yet
+        if not m.get("actual"):
+            continue
+        evt_upper = (m.get("event") or "").upper()
+        for keyword, implied_stage in _EVENT_STAGE_MAP:
+            if keyword in evt_upper:
+                new_rank     = _STAGE_RANK.get(implied_stage, -1)
+                current_best = _STAGE_RANK.get(best_stage, -1)
+                if new_rank > current_best:
+                    best_stage = implied_stage
+                # Capture the earliest discharge timestamp for back-filling
+                if keyword in _DISCHARGE_KEYWORDS:
+                    ts = m.get("timestamp")
+                    if ts and not discharge_ts:
+                        discharge_ts = ts[:10] if len(ts) >= 10 else ts
+                break  # first keyword match wins for this event row
+
+    if not best_stage:
+        return  # no recognisable actual events → nothing to sync
+
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT stage, discharge_date FROM containers WHERE number = ?",
+            (container_no,),
+        ).fetchone()
+        if not row:
+            return  # container not in our DB (externally-tracked only) — skip
+
+        current_rank = _STAGE_RANK.get(row["stage"] or "", -1)
+        new_rank     = _STAGE_RANK.get(best_stage, -1)
+
+        updates = {}
+        if new_rank > current_rank:
+            updates["stage"] = best_stage
+        if discharge_ts and not row["discharge_date"]:
+            updates["discharge_date"] = discharge_ts
+
+        if updates:
+            set_clause = ", ".join(f"{k}=?" for k in updates)
+            conn.execute(
+                f"UPDATE containers SET {set_clause} WHERE number = ?",
+                (*updates.values(), container_no),
+            )
+            conn.commit()
+            print(f"  [tracking sync] {container_no}: {updates}")
+    finally:
+        conn.close()
 
 
 @app.route("/api/drayage-invoices/<invoice_no>/dispute", methods=["POST"])
