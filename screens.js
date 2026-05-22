@@ -190,10 +190,10 @@ function kpiTileV5(tone, label, value, sub) {
 // =================================================================
 function panel1Html() {
   const q = (window.CONT_FILTERS && CONT_FILTERS.search) || "";
-  // Build unified rows, sort by priority (urgency)
   const portRows = V5_PORT_PAST_LFD.map(r => ({
     kind: "port",
-    container: r.container, ssl: r.ssl, stage: "Out-Gate Ready",
+    container: r.container, ssl: r.ssl,
+    stage_label: "At port · Out-Gate Ready", stage_pill_cls: "bad",
     cstatus: "Loaded", loc: r.port,
     days: `${r.daysPast}d past LFD`,
     daysPast: r.daysPast, accrued: r.accrued, daily: r.daily,
@@ -201,75 +201,100 @@ function panel1Html() {
   }));
   const dcRows = V5_DC_DWELLING_EMPTY.map(r => ({
     kind: "dc",
-    container: r.container, ssl: r.ssl, stage: "Delivered",
+    container: r.container, ssl: r.ssl,
+    stage_label: "At DC · empty awaiting return", stage_pill_cls: "warn",
     cstatus: "Empty", loc: r.loc,
-    days: `${r.daysDet}d detention`,
+    days: `${r.daysDet}d past free time`,
     daysPast: r.daysDet, accrued: r.accrued, daily: r.daily,
-    action: r.action, btn: "Send Return",
+    action: r.action, btn: "Send Empty Return",
   }));
-  // Priority sort: largest accrued+1-day-cost first (urgency = exposure + immediacy)
-  let all = [...portRows, ...dcRows].sort((a, b) =>
-    (b.accrued + (b.daily || 0)) - (a.accrued + (a.daily || 0))
-  );
-  if (q) all = all.filter(r => _contRowMatchesSearch(r, q));
-  if (q && all.length === 0) return "";
-  const total = all.reduce((s, r) => s + r.accrued, 0);
-  // Apply priority labels P1/P2/P3 in sorted order
-  all.forEach((r, i) => { r.priority = i === 0 ? "P1" : (i === 1 ? "P2" : "P3+"); });
-  // Tomorrow's projected exposure if no action taken (each container accrues another daily rate)
-  const exposureNextDay = all.reduce((s, r) => s + (r.daily || 0), 0);
-  // Estimated savings if all are dispatched today (avoid the next 24h accrual)
-  const projectedSavings = exposureNextDay;
+  // Priority sort within each group
+  const sortByUrgency = (a, b) => (b.accrued + (b.daily || 0)) - (a.accrued + (a.daily || 0));
+  let portFiltered = portRows.sort(sortByUrgency);
+  let dcFiltered   = dcRows.sort(sortByUrgency);
+  if (q) {
+    portFiltered = portFiltered.filter(r => _contRowMatchesSearch(r, q));
+    dcFiltered   = dcFiltered.filter(r => _contRowMatchesSearch(r, q));
+  }
+  if (q && portFiltered.length === 0 && dcFiltered.length === 0) return "";
+
+  // Apply priority labels P1/P2/P3 ACROSS the union so the highest-exposure
+  // container globally is P1 regardless of which sub-panel it lives in
+  const unionForPriority = [...portFiltered, ...dcFiltered].sort(sortByUrgency);
+  const priorityById = new Map();
+  unionForPriority.forEach((r, i) => priorityById.set(r.container, i === 0 ? "P1" : (i === 1 ? "P2" : "P3+")));
+
+  const totalAccrued = unionForPriority.reduce((s, r) => s + r.accrued, 0);
+  const projectedSavings = unionForPriority.reduce((s, r) => s + (r.daily || 0), 0);
+
+  const renderRow = r => `
+    <tr class="clickable ${r.kind === "port" ? "crit-row" : "warn-row"}" onclick="navigate('containers/${h(r.container)}')">
+      <td><span class="pill ${priorityById.get(r.container) === 'P1' ? 'bad' : (priorityById.get(r.container) === 'P2' ? 'warn' : 'neutral')}" style="font-weight:600;">${h(priorityById.get(r.container))}</span></td>
+      <td class="mono"><b>${h(r.container)}</b></td>
+      <td>${h(r.ssl)}</td>
+      <td><span class="pill ${r.stage_pill_cls}" style="font-size:11px;">${h(r.stage_label)}</span></td>
+      <td>${csTag(r.cstatus)}</td>
+      <td>${h(r.loc)}</td>
+      <td class="mono">${h(r.days)}</td>
+      <td class="num ${r.kind === "port" ? "accrued-crit" : "accrued-warn"}">${fmt$0(r.accrued)}</td>
+      <td class="num mono" style="color:#b91c1c;">+${fmt$0(r.daily || 0)}</td>
+      <td>${h(r.action)}</td>
+      <td>
+        <button class="btn sm" onclick="event.stopPropagation();${
+          r.kind === "port"
+            ? `openDispatchEmail('FB-${r.container.slice(-4)}','${h(r.container)}','${h(r.carrier)}')`
+            : `openReturnEmail('${h(r.container)}','${h(r.ssl)}')`
+        }">${h(r.btn)}</button>
+      </td>
+    </tr>`;
+
+  const portSubtotal = portFiltered.reduce((s, r) => s + r.accrued, 0);
+  const dcSubtotal   = dcFiltered.reduce((s, r) => s + r.accrued, 0);
+
+  const portTable = portFiltered.length === 0 ? "" : `
+    <div style="padding: 8px 14px 4px; font-weight: 600; font-size: 12.5px; color: #334155; background: #fef2f2; border-top: 1px solid #fecaca;">
+      🛳 Port demurrage <span class="muted" style="font-weight:400;">— still at terminal, past Last Free Day</span>
+      <span style="float:right;" class="pill bad">${portFiltered.length} containers · ${fmt$0(portSubtotal)} accrued</span>
+    </div>
+    <table class="tbl">
+      <thead>
+        <tr><th>Priority</th><th>Container</th><th>SSL</th><th>Stage</th><th>Status</th><th>Terminal</th>
+            <th>Days past LFD</th><th class="num">$ Accrued</th><th class="num">+24h cost</th>
+            <th>Recommended Action</th><th></th></tr>
+      </thead>
+      <tbody>${portFiltered.map(renderRow).join("")}</tbody>
+    </table>`;
+
+  const dcTable = dcFiltered.length === 0 ? "" : `
+    <div style="padding: 8px 14px 4px; font-weight: 600; font-size: 12.5px; color: #334155; background: #fffbeb; border-top: 1px solid #fde68a;">
+      🚚 DC detention <span class="muted" style="font-weight:400;">— delivered + emptied, awaiting empty return past free time</span>
+      <span style="float:right;" class="pill warn">${dcFiltered.length} containers · ${fmt$0(dcSubtotal)} accrued</span>
+    </div>
+    <table class="tbl">
+      <thead>
+        <tr><th>Priority</th><th>Container</th><th>SSL</th><th>Stage</th><th>Status</th><th>Location</th>
+            <th>Days past free time</th><th class="num">$ Accrued</th><th class="num">+24h cost</th>
+            <th>Recommended Action</th><th></th></tr>
+      </thead>
+      <tbody>${dcFiltered.map(renderRow).join("")}</tbody>
+    </table>`;
 
   return `
     <div class="card panel-crit" style="margin-bottom: 14px;">
       <div class="card-head">
         <div>
           <div class="card-title">Past LFD / Detention Accruing</div>
-          <div class="card-sub">Port-side demurrage and DC-side detention shown together · sorted by $ exposure descending.</div>
+          <div class="card-sub">Two distinct exposures — port-side demurrage (still at terminal) and DC-side detention (delivered + emptied, awaiting return). Sorted within each by $ exposure descending.</div>
         </div>
-        <div><span class="pill crit">${all.length} accruing · ${fmt$(total)} today</span></div>
+        <div><span class="pill crit">${unionForPriority.length} accruing · ${fmt$(totalAccrued)} today</span></div>
       </div>
-      <div class="card-body tight">
-        <table class="tbl">
-          <thead>
-            <tr>
-              <th>Priority</th>
-              <th>Container</th><th>SSL</th><th>Stage</th><th>Status</th><th>Location</th>
-              <th>Days past threshold</th><th class="num">$ Accrued</th><th class="num">+24h cost</th>
-              <th>Recommended Action</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
-            ${all.map(r => `
-              <tr class="clickable ${r.kind === "port" ? "crit-row" : "warn-row"}" onclick="navigate('containers/${h(r.container)}')">
-                <td><span class="pill ${r.priority === 'P1' ? 'bad' : (r.priority === 'P2' ? 'warn' : 'neutral')}" style="font-weight:600;">${h(r.priority)}</span></td>
-                <td class="mono"><b>${h(r.container)}</b></td>
-                <td>${h(r.ssl)}</td>
-                <td>${stagePill(r.stage)}</td>
-                <td>${csTag(r.cstatus)}</td>
-                <td>${h(r.loc)}</td>
-                <td class="mono">${h(r.days)}</td>
-                <td class="num ${r.kind === "port" ? "accrued-crit" : "accrued-warn"}">${fmt$0(r.accrued)}</td>
-                <td class="num mono" style="color:#b91c1c;">+${fmt$0(r.daily || 0)}</td>
-                <td>${h(r.action)}</td>
-                <td>
-                  <button class="btn sm" onclick="event.stopPropagation();${
-                    r.kind === "port"
-                      ? `openDispatchEmail('FB-${r.container.slice(-4)}','${h(r.container)}','${h(r.carrier)}')`
-                      : `openReturnEmail('${h(r.container)}','${h(r.ssl)}')`
-                  }">${h(r.btn)}</button>
-                </td>
-              </tr>`).join("")}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td colspan="7" style="text-align:right;font-weight:600;">If all are dispatched today, projected 24h savings:</td>
-              <td class="num" style="color:#166534;font-weight:700;">${fmt$0(projectedSavings)}</td>
-              <td colspan="3" class="muted" style="font-size:11.5px;">avoided demurrage + detention at current ladder rates</td>
-            </tr>
-          </tfoot>
-        </table>
+      <div class="card-body tight" style="padding: 0;">
+        ${portTable}
+        ${dcTable}
+        <div style="padding: 10px 14px; background: #f0fdf4; border-top: 1px solid #bbf7d0; display: flex; justify-content: space-between; align-items: center; font-size: 12.5px;">
+          <span class="muted">If all are dispatched / returned today, projected 24h savings:</span>
+          <b style="color:#166534;">${fmt$0(projectedSavings)}</b>
+        </div>
       </div>
     </div>`;
 }

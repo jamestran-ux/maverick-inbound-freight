@@ -8,12 +8,14 @@ const D = window.DATA;
 // (added in-memory so they appear on the Containers / Load Visibility pages
 // alongside the seeded mock data — clicking them auto-fires T49 tracking)
 // ============================================================
-// Past-LFD demo containers (used by the Containers page top panel and the
-// dispatch recommendation flow). Seeded into D.containers so the click-through
-// from Past LFD / Detention Accruing actually lands on a real detail page.
+// Past-LFD + DC-detention demo containers (used by the Containers page top
+// panel + dispatch recommendation flow). Seeded into D.containers so the
+// click-through actually lands on a real detail page with the correct
+// stage / milestone state.
 (function seedPastLFDDemoContainers() {
   if (!D || !D.containers) return;
   const PAST_LFD_DEMO = [
+    // Port-side: still at terminal, past LFD, demurrage accruing
     {
       "Container #": "MSCU7732984", "Steamship Line": "MSC", "Vessel": "MSC INGRID",
       "Equipment": "40HC", "Origin Port": "Shanghai, China", "US Port": "Long Beach, CA",
@@ -23,10 +25,7 @@ const D = window.DATA;
       "Status": "Past LFD — 3 days · demurrage accruing at MSC tier 1",
       "Linked PO": "NA-PO-68301",
       "Notes": "<b>Demo · past LFD</b> — recommended dispatch via West Coast Container Express ($20 cheaper than PCD)",
-      "_demo_past_lfd": true,
-      "_days_past_lfd": 3,
-      "_demurrage_daily": 250,
-      "_demurrage_accrued": 750,
+      "_demo_past_lfd": true, "_days_past_lfd": 3, "_demurrage_daily": 250, "_demurrage_accrued": 750,
       "_origin_terminal": "Long Beach — Pier T",
     },
     {
@@ -38,11 +37,42 @@ const D = window.DATA;
       "Status": "Past LFD — 1 day · demurrage accruing at ONE tier 1",
       "Linked PO": "NA-PO-68302",
       "Notes": "<b>Demo · past LFD</b> — dispatch ASAP via PCD if capacity available",
-      "_demo_past_lfd": true,
-      "_days_past_lfd": 1,
-      "_demurrage_daily": 250,
-      "_demurrage_accrued": 250,
+      "_demo_past_lfd": true, "_days_past_lfd": 1, "_demurrage_daily": 250, "_demurrage_accrued": 250,
       "_origin_terminal": "Long Beach — Pier J",
+    },
+    // DC-side: already delivered + emptied, dwelling past free time at DC
+    {
+      "Container #": "TGHU4521900", "Steamship Line": "Maersk", "Vessel": "MAERSK LIRQUEN",
+      "Equipment": "40HC", "Origin Port": "Shanghai, China", "US Port": "Long Beach, CA",
+      "Discharge Date": "2026-05-09", "Customs Status": "Cleared", "SSL Released": "Yes",
+      "LFD": "2026-05-13", "Pickup Date": "2026-05-10", "Free Time (days)": 5,
+      "Stage": "Delivered", "Demurrage Risk": "MEDIUM",
+      "Status": "Empty awaiting return — 6d past DC free time · detention accruing",
+      "Linked PO": "NA-PO-68111",
+      "Notes": "<b>Demo · DC detention</b> — schedule empty return today; Maersk per-diem $200/day",
+      "_demo_dc_detention": true, "_days_dwelling": 6, "_detention_daily": 200, "_detention_accrued": 1200,
+    },
+    {
+      "Container #": "CMAU3380092", "Steamship Line": "CMA CGM", "Vessel": "CMA CGM JACQUES",
+      "Equipment": "40HC", "Origin Port": "Yantian, China", "US Port": "Long Beach, CA",
+      "Discharge Date": "2026-05-11", "Customs Status": "Cleared", "SSL Released": "Yes",
+      "LFD": "2026-05-15", "Pickup Date": "2026-05-12", "Free Time (days)": 5,
+      "Stage": "Delivered", "Demurrage Risk": "MEDIUM",
+      "Status": "Empty awaiting return — 4d past DC free time · detention accruing",
+      "Linked PO": "NA-PO-68112",
+      "Notes": "<b>Demo · DC detention</b> — schedule empty return today; CMA per-diem $150/day",
+      "_demo_dc_detention": true, "_days_dwelling": 4, "_detention_daily": 150, "_detention_accrued": 600,
+    },
+    {
+      "Container #": "HMMU2238420", "Steamship Line": "HMM", "Vessel": "HMM ALGECIRAS",
+      "Equipment": "40HC", "Origin Port": "Busan, South Korea", "US Port": "Los Angeles, CA",
+      "Discharge Date": "2026-05-13", "Customs Status": "Cleared", "SSL Released": "Yes",
+      "LFD": "2026-05-17", "Pickup Date": "2026-05-14", "Free Time (days)": 5,
+      "Stage": "Delivered", "Demurrage Risk": "LOW",
+      "Status": "Empty awaiting return — 2d past DC free time · detention accruing",
+      "Linked PO": "NA-PO-68113",
+      "Notes": "<b>Demo · DC detention</b> — schedule empty return this week; HMM per-diem $145/day",
+      "_demo_dc_detention": true, "_days_dwelling": 2, "_detention_daily": 145, "_detention_accrued": 290,
     },
   ];
   const existing = new Set(D.containers.map(c => c["Container #"]));
@@ -1424,12 +1454,16 @@ function suggestedAction(cont, inv, finding) {
 const LIVE_EVENT_STAGE_MAP = [
   // Order matters — first match wins. Mid-voyage / inland-leg patterns first
   // so they win over generic "loaded" / "gate out" matches.
-  [/empty return|empty drop/i,                           "Empty Returned"],
+  // Note: "awaiting empty return" is NOT the same as "empty returned" — the
+  // container is still at the consignee, dwelling. Don't mis-tag as returned.
+  [/awaiting empty return|container emptied|empty(?:ied)? at consignee/i, "Delivered"],
+  [/empty returned|empty dropped|returned to ssl|empty drop(?:[\-_ ]?off)?\b/i, "Empty Returned"],
+  [/⚠ ?detention|detention accruing/i,                   "Delivered"],
   [/transshipment|sailing|at sea|underway|in transit \(ocean\)|^in transit$/i, "In Transit (Ocean)"],
   [/inland|rail|on truck|in transit \(inland\)/i,        "In Transit (Inland)"],
   [/deliver(ed)?|consignee/i,                            "Delivered"],
   [/gate ?out|picked up|departure from (pod|terminal)/i, "Pickup"],
-  [/available for pickup|out.?gate.?ready|ready for pickup|lfd/i, "Out-Gate Ready"],
+  [/⚠ ?past lfd|past lfd|available for pickup|out.?gate.?ready|ready for pickup|lfd/i, "Out-Gate Ready"],
   [/ssl release|carrier release|line release|^released/i, "SSL Released"],
   [/customs (cleared|release|hold lifted)/i,             "Customs Cleared"],
   [/discharg/i,                                          "Discharge"],
